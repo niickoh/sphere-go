@@ -25,6 +25,8 @@ type Config struct {
 
 	MailjetAPIKey      string
 	MailjetAPISecret   string
+	MailjetAPIURL      string
+	MailjetRelayKey    string
 	MailFromEmail      string
 	ContactEmailTo     string
 	ContactUpacEmailTo string
@@ -91,8 +93,11 @@ func LoadConfig() Config {
 		IAMLocalBypass:     env("IAM_LOCAL_BYPASS", "False") == "True",
 		IAMLocalBypassHost: []string{"localhost", "127.0.0.1"},
 
+		// MAILJET_API_URL puede apuntar a un relay si Mailjet bloquea la IP del servidor
 		MailjetAPIKey:      os.Getenv("MAILJET_API_KEY"),
 		MailjetAPISecret:   os.Getenv("MAILJET_API_SECRET"),
+		MailjetAPIURL:      env("MAILJET_API_URL", "https://api.mailjet.com/v3.1/send"),
+		MailjetRelayKey:    os.Getenv("MAILJET_RELAY_KEY"),
 		MailFromEmail:      mailFrom,
 		ContactEmailTo:     contactTo,
 		ContactUpacEmailTo: os.Getenv("CONTACT_UPAC_EMAIL_TO"),

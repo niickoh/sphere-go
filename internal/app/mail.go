@@ -18,7 +18,6 @@ import (
 )
 
 const (
-	mailjetURL     = "https://api.mailjet.com/v3.1/send"
 	mailjetTimeout = 15 * time.Second
 	maxFieldLength = 5000
 )
@@ -114,12 +113,16 @@ func (a *App) mailjetSend(ctx context.Context, data any) (int, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, mailjetTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, mailjetURL, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.MailjetAPIURL, bytes.NewReader(b))
 	if err != nil {
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth(a.cfg.MailjetAPIKey, a.cfg.MailjetAPISecret)
+	// Clave compartida con el relay (Cloudflare Worker) cuando no se llama directo a Mailjet
+	if a.cfg.MailjetRelayKey != "" {
+		req.Header.Set("X-Relay-Key", a.cfg.MailjetRelayKey)
+	}
 	res, err := a.http.Do(req)
 	if err != nil {
 		return 0, err
