@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nuevo mensaje de contacto UPAC All Stars</title>
+</head>
+
+<body style="margin:0; padding:24px; background:#120909; font-family:Arial,Helvetica,sans-serif; color:#f8f5ef;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="640" cellpadding="0" cellspacing="0"
+               style="max-width:640px; background:#1c0d0d; border:1px solid #c9a44c; border-radius:18px; overflow:hidden;">
+
+          <tr>
+            <td style="padding:30px 28px; background:linear-gradient(135deg, #8b0e16 0%, #230809 100%); color:#ffffff;">
+              <p style="margin:0 0 10px; font-size:12px; letter-spacing:2px; text-transform:uppercase; color:#d8b15b;">
+                25 años de historia
+              </p>
+              <h1 style="margin:0; font-size:30px; line-height:1.2;">Nuevo mensaje de contacto</h1>
+              <p style="margin:10px 0 0; font-size:15px; color:#f8e7cf;">
+                {{v .EMPRESA}}
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:28px;">
+              <p style="margin:0 0 18px; font-size:15px; line-height:1.6; color:#f5efe5;">
+                Se recibió una nueva consulta desde el formulario de contacto de UPAC All Stars.
+              </p>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                     style="font-size:14px; color:#f8f5ef; border-collapse:collapse;">
+                <tr>
+                  <td style="padding:10px 0; width:140px; border-bottom:1px solid #4a2020;"><strong style="color:#d8b15b;">Nombre:</strong></td>
+                  <td style="padding:10px 0; border-bottom:1px solid #4a2020;">{{v .NOMBRE}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 0; border-bottom:1px solid #4a2020;"><strong style="color:#d8b15b;">Apellidos:</strong></td>
+                  <td style="padding:10px 0; border-bottom:1px solid #4a2020;">{{v .APELLIDOS}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 0; border-bottom:1px solid #4a2020;"><strong style="color:#d8b15b;">Edad:</strong></td>
+                  <td style="padding:10px 0; border-bottom:1px solid #4a2020;">{{v .EDAD}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 0; border-bottom:1px solid #4a2020;"><strong style="color:#d8b15b;">Correo:</strong></td>
+                  <td style="padding:10px 0; border-bottom:1px solid #4a2020;">
+                    <a href="mailto:{{v .EMAIL}}" style="color:#ffffff;">{{v .EMAIL}}</a>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 0; border-bottom:1px solid #4a2020;"><strong style="color:#d8b15b;">Teléfono:</strong></td>
+                  <td style="padding:10px 0; border-bottom:1px solid #4a2020;">{{v .TELEFONO}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 0; border-bottom:1px solid #4a2020;"><strong style="color:#d8b15b;">Dirección:</strong></td>
+                  <td style="padding:10px 0; border-bottom:1px solid #4a2020;">{{v .DIRECCION}}</td>
+                </tr>
+              </table>
+
+              <div style="margin-top:24px; padding:18px; background:#fff7e8; border-left:4px solid #d8b15b; border-radius:10px; color:#1c0d0d;">
+                <h2 style="margin:0 0 10px; font-size:18px; color:#8b0e16;">Mensaje</h2>
+                <div style="font-size:15px; line-height:1.7; white-space:pre-wrap;">{{v .MENSAJE}}</div>
+              </div>
+
+              <p style="margin:20px 0 0; font-size:13px; color:#d2c4b2;">
+                Puedes responder directamente a este correo para continuar el contacto.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:16px 28px; background:#0f0606; color:#cdbb9a; font-size:12px;">
+              Correo generado automáticamente desde el formulario de contacto de UPAC All Stars.
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

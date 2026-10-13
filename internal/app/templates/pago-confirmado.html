@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="supported-color-schemes" content="light" />
+    <title>Pago confirmado</title>
+    <style>
+      body { margin:0; padding:0; background:#f5f7fb; }
+      table { border-collapse:collapse; }
+      img { border:0; outline:none; text-decoration:none; }
+      a { color:#2563eb; }
+      .container { width:100%; background:#f5f7fb; }
+      .card { width:600px; max-width:600px; background:#ffffff; border-radius:12px; overflow:hidden; }
+      .muted { color:#6b7280; }
+      .btn {
+        display:inline-block;
+        background:#0ea5e9;
+        color:#ffffff !important;
+        text-decoration:none;
+        padding:12px 18px;
+        border-radius:10px;
+        font-weight:600;
+      }
+      .pill {
+        display:inline-block;
+        padding:6px 10px;
+        border-radius:999px;
+        background:#ecfeff;
+        color:#0369a1;
+        font-size:12px;
+        font-weight:700;
+      }
+      .box {
+        background:#f8fafc;
+        border:1px solid #e5e7eb;
+        border-radius:12px;
+        padding:14px 14px;
+      }
+      .hr { height:1px; background:#e5e7eb; line-height:1px; font-size:0; }
+      @media (max-width: 620px){
+        .card { width:100% !important; border-radius:0 !important; }
+        .pad { padding:18px !important; }
+      }
+    </style>
+  </head>
+
+  <body>
+    <table role="presentation" class="container" width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td align="center" style="padding:24px;">
+          <table role="presentation" class="card" width="600" cellpadding="0" cellspacing="0">
+
+            <!-- Header -->
+            <tr>
+              <td style="background:#0ea5e9; padding:22px 24px;">
+                <div style="font-family:Arial,Helvetica,sans-serif; color:#ffffff; font-size:28px; font-weight:700;">
+                  Pago confirmado
+                </div>
+                <div style="font-family:Arial,Helvetica,sans-serif; color:#ffffff; font-size:18px; margin-top:6px;">
+                  Hemos recibido tu pago correctamente
+                </div>
+              </td>
+            </tr>
+
+            <!-- Body -->
+            <tr>
+              <td class="pad" style="padding:24px; font-family:Arial,Helvetica,sans-serif; color:#111827;">
+
+                <p style="margin:0 0 14px 0; font-size:15px; line-height:1.5;">
+                  Hola {{v .NOMBRE}},
+                </p>
+
+                <p style="margin:0 0 14px 0; font-size:15px; line-height:1.5;">
+                  Te confirmamos que tu pago fue procesado con éxito en <strong>{{v .EMPRESA}}</strong>.
+                </p>
+
+                <div style="margin:0 0 12px 0;">
+                  <span class="pill">{{v .ESTADO_PAGO}}</span>
+                </div>
+
+                <div class="box">
+                  <h3 style="margin:0 0 10px 0; font-size:15px;">Detalle del pago</h3>
+
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;">
+                    <tr>
+                      <td style="padding:6px 0;"><strong>Monto:</strong></td>
+                      <td style="padding:6px 0;">{{v .MONTO}}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:6px 0;"><strong>Fecha:</strong></td>
+                      <td style="padding:6px 0;">{{v .FECHA_PAGO}}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:6px 0;"><strong>Método:</strong></td>
+                      <td style="padding:6px 0;">{{v .METODO_PAGO}}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:6px 0;"><strong>ID / Referencia:</strong></td>
+                      <td style="padding:6px 0;">{{v .REFERENCIA}}</td>
+                    </tr>
+                    {{if or (t .PLAN) (t .PRODUCTO)}}
+                    <tr>
+                      <td style="padding:6px 0;"><strong>Concepto:</strong></td>
+                      <td style="padding:6px 0;">
+                        {{if t .PLAN}}{{v .PLAN}}{{else}}{{v .PRODUCTO}}{{end}}
+                      </td>
+                    </tr>
+                    {{end}}
+                  </table>
+                </div>
+
+
+
+                <!--<p style="margin:0 0 16px 0; font-size:14px; line-height:1.5;">
+                  Puedes revisar el estado y tu comprobante desde tu perfil:
+                  <div class="hr" style="margin:18px 0;"></div>
+                </p>-->
+
+                <div style="width:100%; margin:0 auto; text-align:center;">
+                  <!-- <a class="btn" href="{{v .URL_COMPROBANTE}}" target="_blank" rel="noopener">Ver comprobante</a>
+
+                  {{if t .URL_PORTAL}}
+                  <div style="margin-top:10px; font-size:13px;" class="muted">
+                    o ingresa a: <a href="{{v .URL_PORTAL}}" target="_blank" rel="noopener">{{v .URL_PORTAL}}</a>
+                  </div>
+                  {{end}}
+                  -->
+
+                  <p style="margin:18px 0 0 0; font-size:12px; line-height:1.5;" class="muted">
+                    Si no reconoces este pago, responde este correo o contáctanos en {{v .EMAIL_SOPORTE}}.
+                  </p>
+                </div>
+
+              </td>
+            </tr>
+
+          </table>
+
+          <p style="margin:12px 0 0 0; font-family:Arial,Helvetica,sans-serif; font-size:11px; color:#94a3b8;">
+            Este correo fue generado automáticamente. Por favor no compartas información sensible.
+          </p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

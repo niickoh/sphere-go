@@ -1,0 +1,22 @@
+# /etc/systemd/system/sphere-api.service
+[Unit]
+Description=API Sphere (Go)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=sphere
+Group=sphere
+WorkingDirectory=/opt/sphere-api
+EnvironmentFile=/opt/sphere-api/.env
+ExecStart=/opt/sphere-api/sphere-api
+Restart=always
+RestartSec=3
+# Endurecimiento básico
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

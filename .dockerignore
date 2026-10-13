@@ -1,0 +1,4 @@
+*.exe
+sphere-api
+.env
+.git

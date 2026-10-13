@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nuevo mensaje de contacto</title>
+</head>
+
+<body style="margin:0; padding:24px; background:#f5f7fb; font-family:Arial,Helvetica,sans-serif; color:#111827;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0"
+               style="max-width:600px; background:#ffffff; border-radius:12px; overflow:hidden;">
+
+          <tr>
+            <td style="padding:24px; background:#0ea5e9; color:#ffffff;">
+              <h1 style="margin:0; font-size:26px;">Nuevo mensaje de contacto</h1>
+              <p style="margin:8px 0 0; font-size:15px;">
+                {{v .EMPRESA}}
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:24px;">
+              <p style="margin:0 0 16px; font-size:15px;">
+                Has recibido un nuevo mensaje desde el formulario de contacto.
+              </p>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                     style="font-size:14px;">
+                <tr>
+                  <td style="padding:8px 0; width:120px;"><strong>Nombre:</strong></td>
+                  <td style="padding:8px 0;">{{v .NOMBRE}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;"><strong>Correo:</strong></td>
+                  <td style="padding:8px 0;">
+                    <a href="mailto:{{v .EMAIL}}">{{v .EMAIL}}</a>
+                  </td>
+                </tr>
+              </table>
+
+              <hr style="border:0; border-top:1px solid #e5e7eb; margin:20px 0;">
+
+              <h2 style="margin:0 0 10px; font-size:17px;">Mensaje</h2>
+
+              <div style="padding:16px; background:#f8fafc; border:1px solid #e5e7eb;
+                          border-radius:8px; font-size:15px; line-height:1.6;
+                          white-space:pre-wrap;">
+                {{v .MENSAJE}}
+              </div>
+
+              <p style="margin:20px 0 0; font-size:13px; color:#6b7280;">
+                Puedes responder directamente a este correo para contactar al remitente.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:16px 24px; background:#f8fafc; color:#6b7280; font-size:12px;">
+              Este correo fue generado automáticamente desde el formulario de contacto.
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

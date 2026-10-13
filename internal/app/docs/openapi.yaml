@@ -1,0 +1,1601 @@
+openapi: 3.0.3
+info:
+  title: API Sphere
+  version: v1
+  description: |
+    API del backend de Sphere (versión Go). Mismas rutas y respuestas que el backend Django.
+
+    **Autenticación.** `POST /auth/login/` deja las cookies `access_token` (15 min) y
+    `refresh_token` (1 día), ambas HttpOnly. Al estar en el mismo dominio, Swagger las envía
+    solas en las siguientes peticiones: no hace falta usar **Authorize**. Si el access token
+    vence, llama a `POST /auth/refresh/`. Si prefieres un token `Bearer`, cópialo desde la cookie
+    `access_token` (DevTools → Application → Cookies) y pégalo en **Authorize**. Si hay cookie,
+    la cookie tiene prioridad sobre el header.
+
+    **Login e IAM.** El login no pide contraseña: valida que el navegador tenga una sesión del IAM
+    (cookie del BFF en `.sportspherecenter.com`) del mismo usuario. Inicia sesión primero en el
+    front para tener esa cookie.
+
+    **Permisos.** *Autenticado*: cualquier usuario con sesión. *Staff*: administrador (tipo 1) o
+    entrenador (tipo 2). *Admin*: solo administrador (tipo 1).
+
+    **Ojo:** los endpoints de `apiMail` envían correos reales con Mailjet, `avisos/add` envía
+    notificaciones push reales y `transbank` usa el ambiente de integración (pruebas) de Webpay.
+servers:
+  - url: /
+security:
+  - cookieAuth: []
+  - bearerAuth: []
+tags:
+  - name: auth
+  - name: usuarios
+  - name: equipos
+  - name: eventos
+  - name: finanzas
+  - name: transbank
+  - name: reportes
+  - name: avisos
+  - name: apiMail
+
+paths:
+  # ---------------------------------------------------------------- auth
+  /auth/login/:
+    post:
+      tags: [auth]
+      summary: Iniciar sesión
+      description: |
+        Valida la sesión del IAM y deja las cookies `access_token` y `refresh_token`.
+        No pide contraseña. Acepta JSON, form-urlencoded o multipart.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username: { type: string, example: admin }
+                remember_me: { type: boolean, example: false, description: Solo alarga la duración de las cookies. }
+      responses:
+        '200':
+          description: Sesión iniciada. Las cookies quedan guardadas en el navegador.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Inicio de sesión exitoso }
+                  usuario:
+                    type: object
+                    properties:
+                      id: { type: integer }
+                      name: { type: string }
+                      username: { type: string }
+                      email: { type: string }
+                      tipo: { type: string, nullable: true, example: Administrador }
+                      tipo_id: { type: integer, nullable: true, example: 1 }
+                  token_info: { $ref: '#/components/schemas/TokenInfo' }
+        '401':
+          description: Usuario inexistente o sesión del IAM inválida.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                credenciales: { value: { error: Credenciales incorrectas } }
+                iam: { value: { error: Sesión del IAM inválida o no corresponde al usuario } }
+
+  /auth/logout/:
+    post:
+      tags: [auth]
+      summary: Cerrar sesión
+      description: Invalida el refresh token (blacklist) y borra las cookies.
+      security: []
+      responses:
+        '200':
+          description: Sesión cerrada.
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean, example: true } } }
+
+  /auth/refresh/:
+    post:
+      tags: [auth]
+      summary: Renovar el access token
+      description: Usa la cookie `refresh_token` y deja una cookie `access_token` nueva.
+      security: []
+      responses:
+        '200':
+          description: Token renovado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Token refrescado }
+                  token_info: { $ref: '#/components/schemas/TokenInfo' }
+        '401':
+          description: Falta la cookie o el token es inválido, vencido o está en la blacklist.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                sinCookie: { value: { error: No se encontró refresh token } }
+                invalido: { value: { error: Token inválido o expirado } }
+
+  # ---------------------------------------------------------------- usuarios
+  /usuarios/listar/:
+    get:
+      tags: [usuarios]
+      summary: Listar usuarios (staff)
+      parameters:
+        - name: tipo
+          in: query
+          description: ID del tipo de usuario, o parte de su descripción (p. ej. `atleta`).
+          schema: { type: string }
+      responses:
+        '200':
+          description: Lista de usuarios.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: integer }
+                    name: { type: string }
+                    username: { type: string }
+                    email: { type: string }
+                    tipo: { type: string, nullable: true }
+                    tipo_id: { type: integer, nullable: true }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /usuarios/agregar/:
+    post:
+      tags: [usuarios]
+      summary: Crear usuario (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, username, email, password, tipo_id]
+              properties:
+                name: { type: string, example: Juan Pérez }
+                username: { type: string, example: juanperez }
+                email: { type: string, example: juan@example.com }
+                password: { type: string, example: Clave123 }
+                tipo_id: { type: integer, example: 3, description: '1 admin, 2 entrenador, 3 atleta' }
+      responses:
+        '201':
+          description: Usuario creado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Usuario creado exitosamente }
+                  usuario:
+                    type: object
+                    properties:
+                      id: { type: integer }
+                      name: { type: string }
+                      username: { type: string }
+                      email: { type: string }
+                      tipo: { type: string, nullable: true }
+        '400':
+          description: Faltan campos, o el email o el username ya existen.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: El tipo de usuario no existe.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /usuarios/eliminar/{id}:
+    delete:
+      tags: [usuarios]
+      summary: Eliminar usuario (admin)
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Mensaje' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /usuarios/editar/{id}:
+    put:
+      tags: [usuarios]
+      summary: Editar usuario
+      description: |
+        El propio usuario o un admin. Solo se cambian los campos enviados.
+        `username` y `tipo_id` solo los puede cambiar un admin (si no, se ignoran).
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                username: { type: string }
+                email: { type: string }
+                password: { type: string }
+                tipo_id: { type: integer }
+      responses:
+        '200':
+          description: Usuario actualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Usuario actualizado exitosamente }
+                  usuario:
+                    type: object
+                    properties:
+                      id: { type: integer }
+                      name: { type: string }
+                      username: { type: string }
+                      email: { type: string }
+                      tipo: { type: string, nullable: true }
+        '403':
+          description: No es el propio usuario ni un admin.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: El usuario o el tipo de usuario no existen.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /usuarios/me/:
+    get:
+      tags: [usuarios]
+      summary: Usuario de la sesión
+      responses:
+        '200':
+          description: Datos del usuario autenticado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  name: { type: string }
+                  username: { type: string }
+                  email: { type: string }
+                  tipo_id: { type: integer, nullable: true }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /usuarios/datosMedicos/{idUser}:
+    parameters: [ { $ref: '#/components/parameters/idUser' } ]
+    put:
+      tags: [usuarios]
+      summary: Crear o actualizar datos médicos
+      description: El propio usuario o un admin. Si no existen se crean; si existen se actualizan los campos enviados.
+      requestBody: { $ref: '#/components/requestBodies/DatosMedicos' }
+      responses: &datosMedicosResponses
+        '200':
+          description: Guardado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+                  created: { type: boolean }
+                  id: { type: integer }
+        '403':
+          description: Sin permiso sobre ese usuario.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+    patch:
+      tags: [usuarios]
+      summary: Crear o actualizar datos médicos (igual que PUT)
+      requestBody: { $ref: '#/components/requestBodies/DatosMedicos' }
+      responses: *datosMedicosResponses
+
+  /usuarios/getDatosMedicos/{idUser}:
+    get:
+      tags: [usuarios]
+      summary: Ver datos médicos
+      description: El propio usuario o staff.
+      parameters: [ { $ref: '#/components/parameters/idUser' } ]
+      responses:
+        '200':
+          description: Datos médicos.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      id: { type: integer }
+                      idUser: { type: integer }
+                  - $ref: '#/components/schemas/DatosMedicos'
+        '403':
+          description: Sin permiso sobre ese usuario.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '404':
+          description: No tiene datos médicos.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  # ---------------------------------------------------------------- equipos
+  /equipos/listar/:
+    get:
+      tags: [equipos]
+      summary: Listar equipos
+      responses:
+        '200':
+          description: Lista de equipos con su cantidad de miembros.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/Equipo'
+                    - type: object
+                      properties:
+                        members_count: { type: integer }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /equipos/add/:
+    post:
+      tags: [equipos]
+      summary: Crear equipo (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EquipoInput' }
+      responses:
+        '201':
+          description: Equipo creado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Equipo creado exitosamente }
+                  equipo: { $ref: '#/components/schemas/Equipo' }
+        '400':
+          description: Faltan campos obligatorios.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /equipos/edit/{id}:
+    put:
+      tags: [equipos]
+      summary: Editar equipo (admin)
+      description: Solo se cambian los campos enviados.
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EquipoInput' }
+      responses:
+        '200':
+          description: Equipo actualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Equipo actualizado exitosamente }
+                  equipo: { $ref: '#/components/schemas/Equipo' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /equipos/delete/{id}:
+    delete:
+      tags: [equipos]
+      summary: Eliminar equipo (admin)
+      description: También elimina sus eventos y asignaciones de usuarios.
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Mensaje' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /equipos/asignarEquipo/:
+    post:
+      tags: [equipos]
+      summary: Asignar usuarios a un equipo (admin)
+      description: Los usuarios que ya estaban asignados se omiten. Si el equipo no existe responde 200 con `error`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [team_id, user_ids]
+              properties:
+                team_id: { type: integer, example: 1 }
+                user_ids: { type: array, items: { type: integer }, example: [2, 3] }
+      responses:
+        '200':
+          description: Resultado de la asignación.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  team_id: { type: integer }
+                  requested_user_ids: { type: array, items: { type: integer } }
+                  created: { type: array, items: { type: integer, nullable: true }, description: Un elemento (null) por asignación creada. }
+                  skipped_already_assigned: { type: array, items: { type: integer } }
+                  missing_users: { type: array, items: { type: integer } }
+                  error: { type: string, nullable: true }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /equipos/quitarEquipo/:
+    post:
+      tags: [equipos]
+      summary: Quitar un usuario de un equipo (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [team_id, user_id]
+              properties:
+                team_id: { type: integer, example: 1 }
+                user_id: { type: integer, example: 2 }
+      responses:
+        '200': { $ref: '#/components/responses/Mensaje' }
+        '400':
+          description: Faltan team_id o user_id.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '404':
+          description: El usuario no pertenece al equipo.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /equipos/listAsignadosEquipo/{idTeam}:
+    get:
+      tags: [equipos]
+      summary: Usuarios asignados a un equipo
+      parameters:
+        - { name: idTeam, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Usuarios del equipo (lista vacía si no tiene).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  team_id: { type: integer }
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        name: { type: string }
+                        username: { type: string }
+                        email: { type: string }
+        '404':
+          description: El equipo no existe.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /equipos/getTeamsByUser/{user_id}:
+    get:
+      tags: [equipos]
+      summary: Equipos de un usuario
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Equipos del usuario.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Equipos encontrados }
+                  data: { type: array, items: { $ref: '#/components/schemas/Equipo' } }
+        '400':
+          description: El usuario no tiene equipos asignados.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  # ---------------------------------------------------------------- eventos
+  /eventos/listEventos/:
+    get:
+      tags: [eventos]
+      summary: Listar eventos
+      parameters:
+        - name: idteams
+          in: query
+          description: IDs de equipos separados por coma (`1,2`) o repetidos (`idteams=1&idteams=2`). Sin filtro devuelve todos.
+          schema: { type: string, example: '1,2' }
+      responses:
+        '200':
+          description: Eventos ordenados por fecha de inicio.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Eventos listados con éxito }
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        title: { type: string }
+                        description: { type: string }
+                        tipo: { $ref: '#/components/schemas/TipoEvento' }
+                        start: { type: string, format: date-time }
+                        end: { type: string, format: date-time }
+                        ubicacion: { type: string }
+                        creado_en: { type: string, format: date-time }
+                        actualizado_en: { type: string, format: date-time }
+                        equipo:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            description: { type: string }
+                            color: { type: string, nullable: true }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /eventos/getUsersEvents/{team_id}:
+    get:
+      tags: [eventos]
+      summary: Eventos de un equipo
+      parameters:
+        - { name: team_id, in: path, required: true, schema: { type: integer } }
+        - { name: tipo, in: query, schema: { $ref: '#/components/schemas/TipoEvento' } }
+        - { name: fecha_desde, in: query, schema: { type: string, example: '2026-01-01' } }
+        - { name: fecha_hasta, in: query, schema: { type: string, example: '2026-12-31' } }
+      responses:
+        '200':
+          description: Equipo y sus eventos.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  equipo:
+                    type: object
+                    properties:
+                      id: { type: integer }
+                      description: { type: string }
+                      category: { type: string }
+                      level: { type: string }
+                      division: { type: string, nullable: true }
+                  total_eventos: { type: integer }
+                  eventos:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        titulo: { type: string }
+                        descripcion: { type: string }
+                        tipo: { $ref: '#/components/schemas/TipoEvento' }
+                        fecha_inicio: { type: string, format: date-time }
+                        fecha_fin: { type: string, format: date-time }
+                        ubicacion: { type: string }
+                        es_recurrente: { type: boolean }
+                        frecuencia: { type: string }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /eventos/crearEvento/:
+    post:
+      tags: [eventos]
+      summary: Crear evento (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [equipo_id, titulo, fecha_inicio, fecha_fin]
+              properties:
+                equipo_id: { type: integer, example: 1 }
+                titulo: { type: string, example: Entrenamiento semanal }
+                descripcion: { type: string, example: '' }
+                tipo: { $ref: '#/components/schemas/TipoEvento' }
+                fecha_inicio: { type: string, format: date-time, example: '2026-11-01T18:00:00Z' }
+                fecha_fin: { type: string, format: date-time, example: '2026-11-01T20:00:00Z' }
+                ubicacion: { type: string, example: Gimnasio }
+      responses:
+        '200': { $ref: '#/components/responses/Mensaje' }
+        '500': { description: 'Falta un campo obligatorio o una fecha no es válida (igual que en Django).' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /eventos/deleteEvento/{id}:
+    delete:
+      tags: [eventos]
+      summary: Eliminar evento (admin)
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Mensaje' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  # ---------------------------------------------------------------- finanzas
+  /finanzas/listar/:
+    get:
+      tags: [finanzas]
+      summary: Listar planes de suscripción
+      responses:
+        '200':
+          description: Planes.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Plan' } }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /finanzas/agregar/:
+    post:
+      tags: [finanzas]
+      summary: Crear plan (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanInput' }
+      responses:
+        '200':
+          description: Plan creado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Plan de suscripción creado con éxito }
+                  planSuscripcion: { $ref: '#/components/schemas/Plan' }
+        '400':
+          description: Faltan campos o el nombre ya existe.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /finanzas/editar/{id}:
+    put:
+      tags: [finanzas]
+      summary: Editar plan (admin)
+      description: Solo se cambian los campos enviados.
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanInput' }
+      responses:
+        '200':
+          description: Plan actualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  planSuscripcion: { $ref: '#/components/schemas/Plan' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /finanzas/eliminar/{id}:
+    delete:
+      tags: [finanzas]
+      summary: Eliminar plan (admin)
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Mensaje' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /finanzas/asignarPlan/:
+    post:
+      tags: [finanzas]
+      summary: Asignar un plan a todos los atletas (admin)
+      description: Crea una suscripción para cada usuario de tipo 3 (atleta).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SuscripcionInput' }
+      responses:
+        '201': { $ref: '#/components/responses/Mensaje' }
+        '400':
+          description: JSON inválido o plan inexistente.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /finanzas/asignarPlanesUser/:
+    post:
+      tags: [finanzas]
+      summary: Asignar planes a usuarios específicos (admin)
+      description: |
+        Los campos del nivel superior son valores por defecto; cada item de `suscripciones`
+        puede sobrescribirlos. `userId` es obligatorio en cada item.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuscripcionInput'
+                - type: object
+                  required: [suscripciones]
+                  properties:
+                    suscripciones:
+                      type: array
+                      items:
+                        allOf:
+                          - type: object
+                            required: [userId]
+                            properties:
+                              userId: { type: integer, example: 3 }
+                          - $ref: '#/components/schemas/SuscripcionInput'
+      responses:
+        '201':
+          description: Suscripciones creadas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Suscripciones creadas con éxito }
+                  created: { type: integer }
+        '400':
+          description: Datos incompletos, o un usuario o plan no existe.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /finanzas/getSuscription/{userId}:
+    get:
+      tags: [finanzas]
+      summary: Suscripción de un usuario
+      description: El propio usuario o staff. Responde 500 si el usuario tiene más de una suscripción (igual que Django).
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Suscripción encontrada, o solo `message` si no tiene.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  suscripcion:
+                    type: object
+                    properties:
+                      id: { type: integer }
+                      userId: { type: integer }
+                      user: { type: object, properties: { id: { type: integer } } }
+                      planId: { type: integer, nullable: true }
+                      plan:
+                        allOf:
+                          - $ref: '#/components/schemas/Plan'
+                          - type: object
+                            properties:
+                              createdAt: { type: string, format: date-time, nullable: true }
+                      status: { type: string }
+                      startDate: { type: string, format: date-time }
+                      endDate: { type: string, format: date-time }
+                      nextBillingDate: { type: string, format: date-time, nullable: true }
+                      canceledAt: { type: string, format: date-time, nullable: true }
+                      createdAt: { type: string, format: date-time, nullable: true }
+                      totalMeses: { type: integer, nullable: true }
+                      mesesPagados: { type: integer, nullable: true }
+        '403':
+          description: Sin permiso sobre ese usuario.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /finanzas/addPago/:
+    post:
+      tags: [finanzas]
+      summary: Registrar pago manual (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [suscriptionId, monto, moneda, status, fechaPago, transactionId]
+              properties:
+                suscriptionId: { type: integer, example: 1 }
+                monto: { type: integer, example: 25000 }
+                moneda: { type: string, example: CLP }
+                status: { type: string, example: success }
+                fechaPago: { type: string, format: date-time, example: '2026-10-13T12:00:00Z' }
+                transactionId: { type: string, example: TRX-0001 }
+                notas: { type: string, example: Pago en efectivo }
+      responses:
+        '200':
+          description: Pago registrado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Pago ingresado con éxito }
+                  pago: { $ref: '#/components/schemas/Pago' }
+        '400':
+          description: Faltan campos obligatorios.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '500':
+          description: La suscripción no existe u otro error de base de datos.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /finanzas/editPago/{transactionId}:
+    put:
+      tags: [finanzas]
+      summary: Editar pago (admin)
+      description: Busca el pago por su `transactionId`. Solo se cambian los campos enviados; `mesesPagados` se guarda en la suscripción.
+      parameters:
+        - { name: transactionId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                monto: { type: integer }
+                moneda: { type: string }
+                status: { type: string }
+                fechaPago: { type: string, format: date-time }
+                suscriptionId: { type: integer }
+                notas: { type: string }
+                mesesPagados: { type: integer }
+      responses:
+        '200':
+          description: Pago actualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Pago actualizado con éxito }
+                  pago: { $ref: '#/components/schemas/Pago' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  # ---------------------------------------------------------------- transbank
+  /transbank/crear-transaccion/:
+    post:
+      tags: [transbank]
+      summary: Iniciar pago Webpay
+      description: |
+        Crea la transacción para pagar `meses` meses de la suscripción del usuario de la sesión.
+        `returnUrl` debe ser de un origen permitido por CORS. Redirige al usuario a `url` con `token_ws`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [returnUrl, meses]
+              properties:
+                returnUrl: { type: string, example: 'https://dev.sportspherecenter.com/pago/retorno' }
+                meses: { type: integer, example: 1 }
+      responses:
+        '200':
+          description: Transacción creada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Transacción creada }
+                  token: { type: string }
+                  url: { type: string }
+                  monto: { type: integer }
+        '400':
+          description: URL de retorno no permitida o cantidad de meses inválida.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '404':
+          description: El usuario no tiene suscripción.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '502':
+          description: Error de Transbank.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /transbank/confirmar-transaccion/:
+    post:
+      tags: [transbank]
+      summary: Confirmar pago Webpay
+      description: Confirma con Transbank el pago asociado a `token_ws`. Si ya estaba confirmado devuelve el resultado guardado.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token_ws]
+              properties:
+                token_ws: { type: string }
+      responses:
+        '200':
+          description: Resultado del pago (`status` es `success` o `failed`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  status: { type: string, example: success }
+                  amount: { type: integer }
+                  transactionId: { type: string }
+                  buyOrder: { type: string, nullable: true }
+                  authorizationCode: { type: string, nullable: true }
+                  paymentType: { type: string, nullable: true }
+                  cardNumber: { type: string, nullable: true }
+                  date: { type: string, format: date-time, nullable: true }
+                  mesesPagados: { type: integer, nullable: true }
+        '400':
+          description: Falta token_ws.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '404':
+          description: No hay un pago con ese token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '502':
+          description: Error de Transbank (el pago queda como fallido).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+
+  # ---------------------------------------------------------------- reportes
+  /reportes/dashboard/:
+    get:
+      tags: [reportes]
+      summary: Totales del dashboard (staff)
+      responses:
+        '200':
+          description: Totales.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  datos:
+                    type: object
+                    properties:
+                      totalUsuarios: { type: integer }
+                      totalEquipos: { type: integer }
+                      totalPlanes: { type: integer }
+                      totalAvisos: { type: integer }
+                      totalEventos: { type: integer }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  # ---------------------------------------------------------------- avisos
+  /avisos/listar/:
+    get:
+      tags: [avisos]
+      summary: Listar avisos
+      responses:
+        '200':
+          description: Avisos, del más reciente al más antiguo.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/Aviso'
+                    - type: object
+                      properties:
+                        creado_por_nombre: { type: string, nullable: true }
+                        creado_por_rol: { type: string, nullable: true }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /avisos/add/:
+    post:
+      tags: [avisos]
+      summary: Crear aviso y enviar push (admin)
+      description: Envía notificaciones push reales a los destinatarios que tengan suscripción.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [titulo, contenido]
+              properties:
+                titulo: { type: string, example: Cambio de horario }
+                contenido: { type: string, example: El entrenamiento del jueves pasa a las 19:00. }
+                target_all: { type: boolean, example: false, description: Enviar a todos los usuarios. }
+                user_ids: { type: array, items: { type: integer }, example: [2, 3] }
+      responses:
+        '201':
+          description: Aviso creado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Aviso creado con éxito }
+                  aviso:
+                    allOf:
+                      - $ref: '#/components/schemas/Aviso'
+                      - type: object
+                        properties:
+                          destinatarios_creados: { type: integer }
+                  metrics:
+                    type: object
+                    properties:
+                      subs: { type: integer }
+                      sent: { type: integer }
+                      deleted: { type: integer }
+                      failed: { type: integer }
+        '400':
+          description: Faltan título, contenido o destinatarios.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /avisos/edit/{id}:
+    put:
+      tags: [avisos]
+      summary: Editar aviso (admin)
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                titulo: { type: string }
+                contenido: { type: string }
+                creado_por: { type: integer }
+      responses:
+        '200':
+          description: Aviso actualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  aviso:
+                    type: object
+                    properties:
+                      id: { type: integer }
+                      titulo: { type: string }
+                      contenido: { type: string }
+                      creado_por: { type: integer, nullable: true }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /avisos/delete/{id}:
+    delete:
+      tags: [avisos]
+      summary: Eliminar aviso (admin)
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Mensaje' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /avisos/mis-avisos/{user}/{unread}:
+    get:
+      tags: [avisos]
+      summary: Avisos recibidos por un usuario
+      parameters:
+        - { name: user, in: path, required: true, schema: { type: integer } }
+        - name: unread
+          in: path
+          required: true
+          description: '`true` para los no leídos, `false` para los leídos.'
+          schema: { type: string, enum: ['true', 'false'] }
+      responses:
+        '200':
+          description: Avisos del usuario.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/Aviso'
+                        - type: object
+                          properties:
+                            fecha_envio: { type: string, format: date-time, nullable: true }
+                            fecha_leido: { type: string, format: date-time, nullable: true }
+        '400':
+          description: Parámetro inválido.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /avisos/unread-count/{user}:
+    get:
+      tags: [avisos]
+      summary: Cantidad de avisos no leídos
+      parameters:
+        - { name: user, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Cantidad.
+          content:
+            application/json:
+              schema: { type: object, properties: { unread: { type: integer } } }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /avisos/read/{aviso_id}:
+    post:
+      tags: [avisos]
+      summary: Marcar un aviso como leído
+      description: Para el usuario de la sesión.
+      parameters:
+        - { name: aviso_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Marcado (o ya estaba leído).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  fecha_leido: { type: string, format: date-time }
+        '404':
+          description: El aviso no es para este usuario.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /avisos/read-all/:
+    post:
+      tags: [avisos]
+      summary: Marcar todos los avisos como leídos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idUser]
+              properties:
+                idUser: { type: integer, example: 1 }
+      responses:
+        '200':
+          description: Avisos marcados.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: OK }
+                  updated: { type: integer }
+                  fecha_leido: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /avisos/push/subscribe/:
+    post:
+      tags: [avisos]
+      summary: Registrar suscripción Web Push
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idUser, endpoint, keys]
+              properties:
+                idUser: { type: integer, example: 1 }
+                endpoint: { type: string, example: 'https://fcm.googleapis.com/fcm/send/...' }
+                keys:
+                  type: object
+                  required: [p256dh, auth]
+                  properties:
+                    p256dh: { type: string }
+                    auth: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/PushSuscripcion' }
+        '201': { $ref: '#/components/responses/PushSuscripcion' }
+        '400':
+          description: Faltan endpoint o keys.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /avisos/push/unsubscribe/:
+    delete:
+      tags: [avisos]
+      summary: Eliminar suscripción Web Push
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idUser, endpoint]
+              properties:
+                idUser: { type: integer, example: 1 }
+                endpoint: { type: string }
+      responses:
+        '200':
+          description: Eliminada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  deleted: { type: integer }
+        '400':
+          description: Falta endpoint.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  # ---------------------------------------------------------------- apiMail
+  /apiMail/confirmacionPago/:
+    post:
+      tags: [apiMail]
+      summary: Correo de confirmación de pago (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string }
+                name: { type: string }
+                estado_pago: { type: string, example: Aprobado }
+                plan_suscripcion: { type: string }
+                monto: { type: integer }
+                metodo_pago: { type: string, example: Webpay }
+                idTrx: { type: string }
+      responses: &mailResponses
+        '200': { $ref: '#/components/responses/MailStatus' }
+        '502': { $ref: '#/components/responses/MailStatus' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /apiMail/bienvenida/:
+    post:
+      tags: [apiMail]
+      summary: Correo de bienvenida con plantilla de Mailjet (admin)
+      requestBody: { $ref: '#/components/requestBodies/Bienvenida' }
+      responses: *mailResponses
+
+  /apiMail/bienvenidaNew/:
+    post:
+      tags: [apiMail]
+      summary: Correo de bienvenida con plantilla propia (admin)
+      requestBody: { $ref: '#/components/requestBodies/Bienvenida' }
+      responses: *mailResponses
+
+  /apiMail/contacto/:
+    post:
+      tags: [apiMail]
+      summary: Formulario de contacto de la landing
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, message]
+              properties:
+                name: { type: string }
+                email: { type: string }
+                message: { type: string }
+                club: { type: string }
+                telefono: { type: string }
+                deportistas: { type: string }
+      responses: &contactoResponses
+        '200': { $ref: '#/components/responses/Mensaje' }
+        '400':
+          description: Faltan campos, el email no es válido o el mensaje es demasiado largo.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: Mailjet rechazó el envío.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: El envío de correos no está configurado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /apiMail/contacto-upac/:
+    post:
+      tags: [apiMail]
+      summary: Formulario de contacto de UPAC All Stars
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nombre, apellidos, edad, email, telefono, direccion, mensaje]
+              properties:
+                nombre: { type: string }
+                apellidos: { type: string }
+                edad: { type: string }
+                email: { type: string }
+                telefono: { type: string }
+                direccion: { type: string }
+                mensaje: { type: string }
+      responses: *contactoResponses
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: La deja `POST /auth/login/`; el navegador la envía solo.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Valor de la cookie `access_token`.
+
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+    idUser:
+      name: idUser
+      in: path
+      required: true
+      schema: { type: integer }
+
+  requestBodies:
+    DatosMedicos:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/DatosMedicos' }
+    Bienvenida:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              email: { type: string }
+              name: { type: string }
+              username: { type: string }
+              password: { type: string }
+
+  responses:
+    Mensaje:
+      description: OK.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Message' }
+    NoEncontrado:
+      description: No existe.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoAutenticado:
+      description: Sin sesión, o token inválido o vencido.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Detail' }
+          examples:
+            sinSesion: { value: { detail: Authentication credentials were not provided. } }
+            vencido:
+              value:
+                detail: Given token not valid for any token type
+                code: token_not_valid
+                messages: [ { token_class: AccessToken, token_type: access, message: Token is invalid or expired } ]
+    SinPermiso:
+      description: El usuario no tiene el rol requerido.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Detail' }
+          example: { detail: No tienes permisos para realizar esta acción }
+    MailStatus:
+      description: '200 si Mailjet aceptó el correo, 502 si lo rechazó.'
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message: { type: string }
+              mailStatus: { type: integer, example: 200 }
+    PushSuscripcion:
+      description: '201 si se creó, 200 si ya existía y se actualizó.'
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok: { type: boolean }
+              created: { type: boolean }
+              id: { type: integer }
+
+  schemas:
+    Message:
+      type: object
+      properties:
+        message: { type: string }
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+    Detail:
+      type: object
+      properties:
+        detail: { type: string }
+        code: { type: string }
+        messages: { type: array, items: { type: object } }
+    TokenInfo:
+      type: object
+      properties:
+        access_token_expires_in: { type: integer, example: 900 }
+        refresh_token_expires_in: { type: integer, example: 86400 }
+        access_token_expires_at: { type: string, example: '2026-10-13T12:15:00.000000' }
+        refresh_token_expires_at: { type: string, example: '2026-10-14T12:00:00.000000' }
+        remember_me: { type: boolean }
+    DatosMedicos:
+      type: object
+      properties:
+        run: { type: string, example: 12.345.678-9 }
+        prevision: { type: string, example: Fonasa }
+        direccion: { type: string }
+        contactoEmergencia: { type: string }
+        lesiones: { type: string }
+        enfermedades: { type: string, nullable: true }
+        alergias: { type: string, nullable: true }
+    EquipoInput:
+      type: object
+      required: [description, category, level, color]
+      properties:
+        description: { type: string, example: Sub-17 }
+        category: { type: string, example: Juvenil }
+        level: { type: string, example: Intermedio }
+        division: { type: string, nullable: true, example: A }
+        color: { type: string, example: '#1E88E5' }
+    Equipo:
+      allOf:
+        - type: object
+          properties:
+            id: { type: integer }
+        - $ref: '#/components/schemas/EquipoInput'
+    TipoEvento:
+      type: string
+      enum: [ENTRENAMIENTO, PARTIDO, REUNION, ACTIVIDAD, OTRO]
+    PlanInput:
+      type: object
+      required: [name, description, price, interval, intervalCount]
+      properties:
+        name: { type: string, example: Mensual }
+        description: { type: string, example: Plan mensual }
+        price: { type: integer, example: 25000 }
+        interval: { type: string, example: month }
+        intervalCount: { type: integer, example: 1 }
+        active: { type: boolean, example: true }
+    Plan:
+      allOf:
+        - type: object
+          properties:
+            id: { type: integer }
+        - $ref: '#/components/schemas/PlanInput'
+    SuscripcionInput:
+      type: object
+      properties:
+        planId: { type: integer, example: 1 }
+        status: { type: string, example: active }
+        startDate: { type: string, format: date-time, example: '2026-01-01T00:00:00Z' }
+        endDate: { type: string, format: date-time, example: '2026-12-31T00:00:00Z' }
+        nextBillingDate: { type: string, format: date-time, example: '2026-02-01T00:00:00Z' }
+        canceledAt: { type: string, format: date-time, nullable: true }
+    Pago:
+      type: object
+      properties:
+        id: { type: integer }
+        suscriptionId: { type: integer }
+        monto: { type: integer }
+        moneda: { type: string }
+        status: { type: string }
+        fechaPago: { type: string, format: date-time }
+        transactionId: { type: string }
+        notas: { type: string, nullable: true }
+    Aviso:
+      type: object
+      properties:
+        id: { type: integer }
+        titulo: { type: string }
+        contenido: { type: string }
+        creado_por: { type: integer, nullable: true }
+        fecha_creacion: { type: string, format: date-time }

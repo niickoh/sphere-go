@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="supported-color-schemes" content="light" />
+    <title>Bienvenida y credenciales</title>
+    <style>
+      /* Fallbacks básicos (muchos clientes de correo limitan CSS) */
+      body { margin:0; padding:0; background:#f5f7fb; }
+      table { border-collapse:collapse; }
+      img { border:0; outline:none; text-decoration:none; }
+      a { color:#2563eb; }
+      .container { width:100%; background:#f5f7fb; }
+      .card { width:600px; max-width:600px; background:#ffffff; border-radius:12px; overflow:hidden; }
+      .muted { color:#6b7280; }
+      .btn {
+        display:inline-block;
+        background:#2563eb;
+        color:#ffffff !important;
+        text-decoration:none;
+        padding:12px 18px;
+        border-radius:10px;
+        font-weight:600;
+      }
+      .code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        background:#f3f4f6;
+        border:1px solid #e5e7eb;
+        padding:10px 12px;
+        border-radius:10px;
+        display:block;
+        word-break:break-word;
+      }
+      .hr { height:1px; background:#e5e7eb; line-height:1px; font-size:0; }
+      @media (max-width: 620px){
+        .card { width:100% !important; border-radius:0 !important; }
+        .pad { padding:18px !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Wrapper -->
+    <table role="presentation" class="container" width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td align="center" style="padding:24px;">
+          <!-- Card -->
+          <table role="presentation" class="card" width="600" cellpadding="0" cellspacing="0">
+            <!-- Header -->
+            <tr>
+              <td style="background:#0ea5e9; padding:22px 24px;">
+                <div style="font-family:Arial,Helvetica,sans-serif; color:#ffffff; font-size:28px; font-weight:700;">
+                  Bienvenid@ a {{v .EMPRESA}}
+                </div>
+                <div style="font-family:Arial,Helvetica,sans-serif; color:#ffffff; font-size:18px; margin-top:6px;">
+                  Credenciales e información de inicio
+                </div>
+              </td>
+            </tr>
+
+            <!-- Body -->
+            <tr>
+              <td class="pad" style="padding:24px; font-family:Arial,Helvetica,sans-serif; color:#111827;">
+                <p style="margin:0 0 14px 0; font-size:15px; line-height:1.5;">
+                  Hola {{v .NOMBRE}},
+                </p>
+
+                <p style="margin:0 0 16px 0; font-size:15px; line-height:1.5;">
+                  ¡Te damos la bienvenida a <strong>{{v .EMPRESA}}</strong>! Nos alegra que te sumes como
+                  atleta.
+                </p>
+
+                <div class="hr" style="margin:18px 0;"></div>
+
+                <h3 style="margin:0 0 10px 0; font-size:15px;">1) Accesos y credenciales</h3>
+
+                <p style="margin:0 0 8px 0; font-size:14px;">
+                  <strong>URL de acceso:</strong>
+                  <a href="{{v .URL_ACCESO}}" target="_blank" rel="noopener">{{v .URL_ACCESO}}</a>
+                </p>
+
+                <p style="margin:0 0 8px 0; font-size:14px;">
+                  <strong>Usuario:</strong> {{v .USUARIO}}
+                </p>
+
+                <p style="margin:0 0 8px 0; font-size:14px;">
+                  <strong>Contraseña temporal:</strong>
+                </p>
+                <span class="code">{{v .PASSWORD}}</span>
+
+                <p style="margin:10px 0 0 0; font-size:13px; line-height:1.5;" class="muted">
+
+                </p>
+
+                <div class="hr" style="margin:18px 0;"></div>
+
+                <p style="margin:0 0 16px 0; font-size:14px; line-height:1.5;">
+                  Si tienes cualquier problema para ingresar o te falta algún acceso, responde este correo
+                </p>
+
+                <div style="width:100%; margin: 0 auto; text-align: center;">
+                    <a class="btn" href="{{v .URL_ACCESO}}" target="_blank" rel="noopener">Ingresar ahora</a>
+                    <p style="margin:18px 0 0 0; font-size:12px; line-height:1.5;" class="muted">
+                  Recomendación: no reenvíes este correo
+                </p>
+                </div>
+
+
+              </td>
+            </tr>
+
+            <!-- Footer
+            <tr>
+              <td style="background:#f8fafc; padding:16px 24px; font-family:Arial,Helvetica,sans-serif;">
+                <p style="margin:0; font-size:12px; color:#64748b;">
+                  {{v .TU_NOMBRE}} · {{v .TU_CARGO}} · {{v .EMPRESA}}<br />
+                  {{v .TU_EMAIL}} · {{v .TU_TELEFONO}}
+                </p>
+              </td>
+            </tr>-->
+          </table>
+
+          <p style="margin:12px 0 0 0; font-family:Arial,Helvetica,sans-serif; font-size:11px; color:#94a3b8;">
+            Este correo fue generado para entregar accesos iniciales.
+          </p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
