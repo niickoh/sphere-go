@@ -424,7 +424,15 @@ func (a *App) login(c *Ctx) {
 		c.JSON(401, obj("error", "Credenciales incorrectas"))
 		return
 	}
-	if a.cfg.IAMVerifyLogin && !a.iamLocalBypass(c.r) {
+
+	// Dos modos: con "password" es el login propio de la app; sin él, SSO (sesión del IAM)
+	password, passwordLogin := data["password"]
+	if passwordLogin {
+		if !a.cfg.PasswordLoginEnabled {
+			c.JSON(403, obj("error", "El inicio de sesión con contraseña está deshabilitado"))
+			return
+		}
+	} else if a.cfg.IAMVerifyLogin && !a.iamLocalBypass(c.r) {
 		iam := a.iamUsername(c.r)
 		us, isStr := username.(string)
 		if iam == nil || !isStr || *iam != us {
@@ -435,12 +443,28 @@ func (a *App) login(c *Ctx) {
 
 	u, err := scanUser(a.db.QueryRow(c.ctx(), userSelect+` WHERE u.username = $1 AND u.is_active ORDER BY u.id LIMIT 1`, pyStr(username)))
 	if isNoRows(err) {
+		if passwordLogin {
+			// Mismo costo que una contraseña real, para no revelar qué usuarios existen
+			checkPassword(pyStr(password), dummyPasswordHash)
+		}
 		c.JSON(401, obj("error", "Credenciales incorrectas"))
 		return
 	}
 	if err != nil {
 		c.serverError(err)
 		return
+	}
+
+	if passwordLogin {
+		var hash string
+		if err := a.db.QueryRow(c.ctx(), `SELECT password FROM usuarios_usuarios WHERE id = $1`, u.ID).Scan(&hash); err != nil {
+			c.serverError(err)
+			return
+		}
+		if !truthy(password) || !checkPassword(pyStr(password), hash) {
+			c.JSON(401, obj("error", "Credenciales incorrectas"))
+			return
+		}
 	}
 
 	remember := truthy(rememberMe)

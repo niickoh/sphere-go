@@ -61,14 +61,20 @@ endpoint, actualiza también `openapi.yaml`.
 
 Para probar endpoints protegidos:
 
-1. Inicia sesión en el front de dev, para que el navegador tenga la cookie del IAM.
-2. En Swagger ejecuta `POST /auth/login/` con tu `username`. Las cookies de sesión quedan
-   guardadas y Swagger las envía solas en las siguientes peticiones.
-3. Si pasan 15 minutos y empiezas a recibir 401, ejecuta `POST /auth/refresh/`.
+1. En Swagger ejecuta `POST /auth/login/` con tu `username` y `password`. Las cookies de sesión
+   quedan guardadas y Swagger las envía solas en las siguientes peticiones.
+2. Si pasan 15 minutos y empiezas a recibir 401, ejecuta `POST /auth/refresh/`.
+
+El login tiene dos modos:
+
+- **Contraseña** (`username` + `password`): el login propio de la app. Se apaga con
+  `PASSWORD_LOGIN_ENABLED=False` (responde 403).
+- **SSO** (solo `username`): exige una sesión del IAM del mismo usuario (cookie del BFF). Para
+  probarlo desde Swagger, inicia sesión antes en el front de dev con el botón de SSO.
 
 Con la API en `localhost` puedes saltarte el IAM con `IAM_LOCAL_BYPASS=True`. No pongas
-`IAM_VERIFY_LOGIN=False` en un servidor público: el login no pide contraseña, así que cualquiera
-podría entrar como cualquier usuario.
+`IAM_VERIFY_LOGIN=False` en un servidor público: el login por SSO no pide contraseña, así que
+cualquiera podría entrar como cualquier usuario.
 
 ## Qué se portó
 

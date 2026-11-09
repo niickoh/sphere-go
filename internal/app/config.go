@@ -18,6 +18,8 @@ type Config struct {
 	JWTCookieSameSite string
 	JWTCookieDomain   string
 
+	PasswordLoginEnabled bool
+
 	IAMVerifyLogin     bool
 	IAMMeURL           string
 	IAMLocalBypass     bool
@@ -87,6 +89,9 @@ func LoadConfig() Config {
 		JWTCookieSecure:   true,
 		JWTCookieSameSite: "None",
 		JWTCookieDomain:   "",
+
+		// Login con usuario y contraseña de la app (además del SSO del IAM)
+		PasswordLoginEnabled: env("PASSWORD_LOGIN_ENABLED", "True") == "True",
 
 		IAMVerifyLogin:     env("IAM_VERIFY_LOGIN", "True") == "True",
 		IAMMeURL:           env("IAM_ME_URL", "https://bff-auth.sportspherecenter.com/auth/me"),

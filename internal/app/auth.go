@@ -5,6 +5,7 @@ import (
 	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -265,6 +266,31 @@ func makePassword(password string) string {
 		panic(err)
 	}
 	return fmt.Sprintf("pbkdf2_sha256$%d$%s$%s", pbkdf2Iterations, salt, base64.StdEncoding.EncodeToString(key))
+}
+
+// dummyPasswordHash se usa cuando el usuario no existe, para que la respuesta tarde lo mismo.
+var dummyPasswordHash = makePassword("sphere-dummy-password")
+
+// checkPassword verifica una contraseña contra un hash "pbkdf2_sha256$iter$salt$hash" de Django.
+// Un hash vacío o inutilizable (p. ej. "!...") nunca coincide.
+func checkPassword(password, encoded string) bool {
+	parts := strings.SplitN(encoded, "$", 4)
+	if len(parts) != 4 || parts[0] != "pbkdf2_sha256" {
+		return false
+	}
+	iterations, err := strconv.Atoi(parts[1])
+	if err != nil || iterations <= 0 {
+		return false
+	}
+	expected, err := base64.StdEncoding.DecodeString(parts[3])
+	if err != nil || len(expected) == 0 {
+		return false
+	}
+	key, err := pbkdf2.Key(sha256.New, password, []byte(parts[2]), iterations, len(expected))
+	if err != nil {
+		return false
+	}
+	return subtle.ConstantTimeCompare(key, expected) == 1
 }
 
 // jsonInt64 normaliza un claim numérico (json.Number) para reutilizarlo al firmar.

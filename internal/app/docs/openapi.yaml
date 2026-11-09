@@ -12,9 +12,10 @@ info:
     `access_token` (DevTools → Application → Cookies) y pégalo en **Authorize**. Si hay cookie,
     la cookie tiene prioridad sobre el header.
 
-    **Login e IAM.** El login no pide contraseña: valida que el navegador tenga una sesión del IAM
-    (cookie del BFF en `.sportspherecenter.com`) del mismo usuario. Inicia sesión primero en el
-    front para tener esa cookie.
+    **Login.** Hay dos modos. Con `username` y `password` es el login propio de la app (se puede
+    apagar con `PASSWORD_LOGIN_ENABLED=False`). Solo con `username` es el login por SSO: valida
+    que el navegador tenga una sesión del IAM (cookie del BFF en `.sportspherecenter.com`) del
+    mismo usuario; inicia sesión primero en el front para tener esa cookie.
 
     **Permisos.** *Autenticado*: cualquier usuario con sesión. *Staff*: administrador (tipo 1) o
     entrenador (tipo 2). *Admin*: solo administrador (tipo 1).
@@ -44,8 +45,9 @@ paths:
       tags: [auth]
       summary: Iniciar sesión
       description: |
-        Valida la sesión del IAM y deja las cookies `access_token` y `refresh_token`.
-        No pide contraseña. Acepta JSON, form-urlencoded o multipart.
+        Deja las cookies `access_token` y `refresh_token`. Si se envía `password`, valida la
+        contraseña del usuario (403 si `PASSWORD_LOGIN_ENABLED=False`). Si no, valida la sesión
+        del IAM (SSO). Acepta JSON, form-urlencoded o multipart.
       security: []
       requestBody:
         required: true
@@ -56,6 +58,7 @@ paths:
               required: [username]
               properties:
                 username: { type: string, example: admin }
+                password: { type: string, format: password, description: Login con contraseña. Omitir para el login por SSO (IAM). }
                 remember_me: { type: boolean, example: false, description: Solo alarga la duración de las cookies. }
       responses:
         '200':
