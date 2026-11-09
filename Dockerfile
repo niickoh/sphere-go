@@ -11,6 +11,6 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata && adduser -D -H sphere
 COPY --from=build /out/sphere-api /usr/local/bin/sphere-api
 USER sphere
-ENV PORT=8080
-EXPOSE 8080
+ENV PORT=4001
+EXPOSE 4001
 ENTRYPOINT ["/usr/local/bin/sphere-api"]
