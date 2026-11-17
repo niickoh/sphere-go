@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -171,8 +172,11 @@ func (a *App) verAsignadosEquipo(c *Ctx) {
 		c.JSON(404, obj("message", fmt.Sprintf("Equipo con id %d no encontrado", idTeam), "team_id", idTeam, "data", []any{}))
 		return
 	}
-	rows, err := a.db.Query(ctx, `SELECT u.id, u.name, u.username, u.email FROM usuarios_usersteams ut
-		JOIN usuarios_usuarios u ON u.id = ut."idUser_id" WHERE ut."idTeam_id" = $1`, idTeam)
+	// Incluye el rol para que el front agrupe a deportistas, coaches y staff
+	rows, err := a.db.Query(ctx, `SELECT u.id, u.name, u.username, u.email, u.tipo_id, t.description, u.perfiles FROM usuarios_usersteams ut
+		JOIN usuarios_usuarios u ON u.id = ut."idUser_id"
+		LEFT JOIN usuarios_tipousuario t ON t.id = u.tipo_id
+		WHERE ut."idTeam_id" = $1 ORDER BY u.name`, idTeam)
 	if err != nil {
 		c.serverError(err)
 		return
@@ -182,11 +186,15 @@ func (a *App) verAsignadosEquipo(c *Ctx) {
 	for rows.Next() {
 		var id int64
 		var name, username, email string
-		if err := rows.Scan(&id, &name, &username, &email); err != nil {
+		var tipoID *int64
+		var tipo *string
+		var perfiles []int64
+		if err := rows.Scan(&id, &name, &username, &email, &tipoID, &tipo, &perfiles); err != nil {
 			c.serverError(err)
 			return
 		}
-		data = append(data, obj("id", id, "name", name, "username", username, "email", email))
+		data = append(data, obj("id", id, "name", name, "username", username, "email", email,
+			"tipo_id", ptrAny(tipoID), "tipo", ptrAny(tipo), "perfiles", perfilesJSON(perfiles)))
 	}
 	if err := rows.Err(); err != nil {
 		c.serverError(err)
@@ -398,34 +406,132 @@ func (a *App) getEvents(c *Ctx) {
 }
 
 // POST eventos/crearEvento/
+// datosEvento valida los campos de un evento y los devuelve listos para guardar.
+// En "parcial" (edición) solo se validan los campos presentes; el resto conserva su valor actual.
+func (a *App) datosEvento(ctx context.Context, data map[string]any, actual map[string]any) (map[string]any, string, error) {
+	v := map[string]any{}
+	for k, x := range actual {
+		v[k] = x
+	}
+	for _, k := range []string{"equipo_id", "titulo", "descripcion", "tipo", "fecha_inicio", "fecha_fin", "ubicacion"} {
+		if x, ok := data[k]; ok {
+			v[k] = x
+		}
+	}
+	titulo := strings.TrimSpace(pyStr(v["titulo"]))
+	if v["titulo"] == nil || titulo == "" {
+		return nil, "El título es obligatorio", nil
+	}
+	if len([]rune(titulo)) > 200 {
+		return nil, "El título no puede tener más de 200 caracteres", nil
+	}
+	v["titulo"] = titulo
+	equipo, ok := pyInt(v["equipo_id"])
+	if !ok {
+		return nil, "Selecciona el equipo", nil
+	}
+	var existe bool
+	if err := a.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM usuarios_equipos WHERE id = $1)`, equipo).Scan(&existe); err != nil {
+		return nil, "", err
+	}
+	if !existe {
+		return nil, "El equipo no existe", nil
+	}
+	v["equipo_id"] = equipo
+	ini, okIni := parseISO(strings.ReplaceAll(pyStr(v["fecha_inicio"]), "Z", "+00:00"))
+	fin, okFin := parseISO(strings.ReplaceAll(pyStr(v["fecha_fin"]), "Z", "+00:00"))
+	if !okIni || !okFin {
+		return nil, "Indica fecha y hora de inicio y término", nil
+	}
+	if !fin.After(ini) {
+		return nil, "El término debe ser posterior al inicio", nil
+	}
+	v["fecha_inicio"], v["fecha_fin"] = ini, fin
+	if v["tipo"] == nil || strings.TrimSpace(pyStr(v["tipo"])) == "" {
+		v["tipo"] = "Entrenamiento"
+	}
+	v["descripcion"] = strings.TrimSpace(pyStr(or0(v["descripcion"])))
+	v["ubicacion"] = strings.TrimSpace(pyStr(or0(v["ubicacion"])))
+	return v, "", nil
+}
+
+// or0 convierte nil en "" para los textos opcionales
+func or0(x any) any {
+	if x == nil {
+		return ""
+	}
+	return x
+}
+
+// POST eventos/crearEvento/
 func (a *App) createEvent(c *Ctx) {
 	data, ok := c.data()
 	if !ok {
 		return
 	}
-	for _, k := range []string{"equipo_id", "titulo", "fecha_inicio", "fecha_fin"} {
-		if _, ok := data[k]; !ok {
-			c.serverError(fmt.Errorf("KeyError: %q", k))
-			return
-		}
-	}
-	get := func(k string, def any) any {
-		if v, ok := data[k]; ok {
-			return v
-		}
-		return def
-	}
-	now := nowUTC()
-	_, err := a.db.Exec(c.ctx(), `INSERT INTO eventos_evento (equipo_id, titulo, descripcion, tipo, fecha_inicio, fecha_fin,
-		ubicacion, creado_en, actualizado_en, es_recurrente, frecuencia)
-		VALUES ($1::text::int, $2::text, $3::text, $4::text, $5::text::timestamptz, $6::text::timestamptz, $7::text, $8, $8, false, '')`,
-		dbText(data["equipo_id"]), dbText(data["titulo"]), dbText(get("descripcion", "")), dbText(get("tipo", "ENTRENAMIENTO")),
-		dbText(data["fecha_inicio"]), dbText(data["fecha_fin"]), dbText(get("ubicacion", "")), now)
+	v, msg, err := a.datosEvento(c.ctx(), data, nil)
 	if err != nil {
 		c.serverError(err)
 		return
 	}
-	c.JSON(200, obj("message", "Evento creado exitosamente"))
+	if msg != "" {
+		c.JSON(400, obj("message", msg))
+		return
+	}
+	now := nowUTC()
+	var id int64
+	err = a.db.QueryRow(c.ctx(), `INSERT INTO eventos_evento (equipo_id, titulo, descripcion, tipo, fecha_inicio, fecha_fin,
+		ubicacion, creado_en, actualizado_en, es_recurrente, frecuencia)
+		VALUES ($1, $2::text, $3::text, $4::text, $5, $6, $7::text, $8, $8, false, '') RETURNING id`,
+		v["equipo_id"], v["titulo"], dbText(v["descripcion"]), dbText(v["tipo"]),
+		v["fecha_inicio"], v["fecha_fin"], dbText(v["ubicacion"]), now).Scan(&id)
+	if err != nil {
+		c.serverError(err)
+		return
+	}
+	c.JSON(200, obj("message", "Evento creado exitosamente", "id", id))
+}
+
+// PUT eventos/editEvento/<int:id>: cambia los datos del evento (los campos que no vienen se mantienen)
+func (a *App) editEvent(c *Ctx) {
+	id := c.intParam("id")
+	var equipo int64
+	var titulo, desc, tipo, ubicacion string
+	var ini, fin time.Time
+	err := a.db.QueryRow(c.ctx(), `SELECT equipo_id, titulo, descripcion, tipo, fecha_inicio, fecha_fin, ubicacion
+		FROM eventos_evento WHERE id = $1`, id).Scan(&equipo, &titulo, &desc, &tipo, &ini, &fin, &ubicacion)
+	if isNoRows(err) {
+		c.JSON(404, obj("message", "Evento no encontrado"))
+		return
+	}
+	if err != nil {
+		c.serverError(err)
+		return
+	}
+	data, ok := c.data()
+	if !ok {
+		return
+	}
+	actual := map[string]any{"equipo_id": equipo, "titulo": titulo, "descripcion": desc, "tipo": tipo,
+		"fecha_inicio": pyISO(ini), "fecha_fin": pyISO(fin), "ubicacion": ubicacion}
+	v, msg, err := a.datosEvento(c.ctx(), data, actual)
+	if err != nil {
+		c.serverError(err)
+		return
+	}
+	if msg != "" {
+		c.JSON(400, obj("message", msg))
+		return
+	}
+	_, err = a.db.Exec(c.ctx(), `UPDATE eventos_evento SET equipo_id = $1, titulo = $2::text, descripcion = $3::text, tipo = $4::text,
+		fecha_inicio = $5, fecha_fin = $6, ubicacion = $7::text, actualizado_en = $8 WHERE id = $9`,
+		v["equipo_id"], v["titulo"], dbText(v["descripcion"]), dbText(v["tipo"]), v["fecha_inicio"], v["fecha_fin"],
+		dbText(v["ubicacion"]), nowUTC(), id)
+	if err != nil {
+		c.serverError(err)
+		return
+	}
+	c.JSON(200, obj("message", "Evento actualizado", "id", id))
 }
 
 // DELETE eventos/deleteEvento/<int:id>

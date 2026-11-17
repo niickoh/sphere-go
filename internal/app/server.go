@@ -61,13 +61,16 @@ type Perm int
 const (
 	AllowAny Perm = iota
 	IsAuthenticated
-	IsClubAdmin // usuarios.permissions.IsClubAdmin
-	IsClubStaff // usuarios.permissions.IsClubStaff
+	IsClubAdmin  // usuarios.permissions.IsClubAdmin
+	IsClubStaff  // usuarios.permissions.IsClubStaff (administrador o entrenador: puede actuar)
+	IsClubViewer // administrador, entrenador o staff: solo lectura de la información del club
 )
 
 const (
 	tipoAdmin      = 1
 	tipoEntrenador = 2
+	tipoAtleta     = 3
+	tipoStaff      = 4 // ve lo mismo que un entrenador, sin crear ni editar
 )
 
 type segment struct {
@@ -419,8 +422,15 @@ func isStaffMember(u *User) bool {
 	return u != nil && (t == tipoAdmin || t == tipoEntrenador)
 }
 
+// isClubViewer: puede ver la información del club (administrador, entrenador o staff)
+func isClubViewer(u *User) bool {
+	return isStaffMember(u) || (u != nil && u.tipo() == tipoStaff)
+}
+
+// isSelfOrStaff se usa solo en consultas (ver el plan o los datos médicos de alguien),
+// por eso también incluye al rol Staff, que es de solo lectura.
 func isSelfOrStaff(u *User, userID int64) bool {
-	return u != nil && (u.ID == userID || isStaffMember(u))
+	return u != nil && (u.ID == userID || isClubViewer(u))
 }
 
 func (c *Ctx) checkPerm(p Perm) bool {
@@ -432,6 +442,8 @@ func (c *Ctx) checkPerm(p Perm) bool {
 		ok = isAdmin(c.user)
 	case IsClubStaff:
 		ok = isStaffMember(c.user)
+	case IsClubViewer:
+		ok = isClubViewer(c.user)
 	}
 	if ok {
 		return true

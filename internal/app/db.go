@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"strings"
@@ -72,6 +73,31 @@ func loadSchemaInfo(ctx context.Context, db *pgxpool.Pool) (*schemaInfo, error) 
 	}
 	if !s.tables["usuarios_usuarios"] {
 		return nil, errors.New("la base de datos no tiene la tabla usuarios_usuarios (¿DB_NAME correcto?)")
+	}
+
+	// Cambios de esquema de esta versión. No hay migraciones: cada sentencia es aditiva e idempotente
+	// (se puede correr en cada arranque) y no modifica datos existentes.
+	for _, q := range []string{
+		// Planes: tipo (mensualidad, clase o pack), disciplina y cantidad de clases de los packs.
+		// Los planes existentes quedan como mensualidad, que es lo que eran.
+		`ALTER TABLE finanzas_plansuscripciones ADD COLUMN IF NOT EXISTS tipo varchar(20) NOT NULL DEFAULT 'mensualidad'`,
+		`ALTER TABLE finanzas_plansuscripciones ADD COLUMN IF NOT EXISTS disciplina varchar(50)`,
+		`ALTER TABLE finanzas_plansuscripciones ADD COLUMN IF NOT EXISTS "cantidadClases" integer`,
+		// Perfiles adicionales del usuario (p. ej. un coach que también es atleta). Los permisos los da
+		// siempre tipo_id (el perfil principal); estos solo suman las funciones de esos roles.
+		`ALTER TABLE usuarios_usuarios ADD COLUMN IF NOT EXISTS perfiles integer[] NOT NULL DEFAULT '{}'`,
+		// A quién se dirigió cada aviso ("Todo el club", "Equipos: ..."), para mostrarlo en el tablón
+		`ALTER TABLE avisos_aviso ADD COLUMN IF NOT EXISTS audiencia varchar(200)`,
+	} {
+		if _, err := db.Exec(ctx, q); err != nil {
+			return nil, fmt.Errorf("actualizando el esquema: %w", err)
+		}
+	}
+	// Rol Staff: ve lo mismo que un entrenador, sin crear ni editar. Si no se puede crear no se
+	// impide el arranque; solo no se podrán asignar usuarios Staff.
+	if _, err := db.Exec(ctx, `INSERT INTO usuarios_tipousuario (id, description)
+		SELECT $1, 'Staff' WHERE NOT EXISTS (SELECT 1 FROM usuarios_tipousuario WHERE id = $1)`, tipoStaff); err != nil {
+		log.Printf("aviso: no se pudo crear el tipo de usuario Staff (id %d): %v", tipoStaff, err)
 	}
 	rows, err = db.Query(ctx, `SELECT column_name FROM information_schema.columns
 		WHERE table_schema = current_schema() AND table_name = 'usuarios_usuarios'`)

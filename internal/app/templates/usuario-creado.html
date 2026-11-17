@@ -1,0 +1,17 @@
+{{template "head" .}}
+              <p style="margin:0 0 16px;">Hola <strong>{{v .NOMBRE}}</strong>,</p>
+              <p style="margin:0 0 18px;">Se creó tu cuenta en <strong>SportSphere Pro</strong>{{if t .CLUB}} para el club <strong>{{v .CLUB}}</strong>{{end}}{{if t .ROL}} con el rol de <strong>{{v .ROL}}</strong>{{end}}. Estos son tus datos de acceso:</p>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #cce9f7; border-radius:10px; font-size:14px;">
+                <tr>
+                  <td style="padding:12px 16px; width:110px; color:#4f6b80; border-bottom:1px solid #e6f4fb;">Usuario</td>
+                  <td style="padding:12px 16px; border-bottom:1px solid #e6f4fb; font-family:Consolas,Menlo,monospace; font-weight:bold;">{{v .USUARIO}}</td>
+                </tr>
+                {{if t .PASSWORD}}<tr>
+                  <td style="padding:12px 16px; color:#4f6b80;">Contraseña</td>
+                  <td style="padding:12px 16px; font-family:Consolas,Menlo,monospace; font-weight:bold;">{{v .PASSWORD}}</td>
+                </tr>{{end}}
+              </table>
+{{template "boton" .}}
+              <p style="margin:18px 0 0; font-size:13px; color:#4f6b80;">Por seguridad, cambia tu contraseña después de iniciar sesión por primera vez.</p>
+{{template "foot" .}}

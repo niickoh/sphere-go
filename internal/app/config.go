@@ -32,6 +32,7 @@ type Config struct {
 	MailFromEmail      string
 	ContactEmailTo     string
 	ContactUpacEmailTo string
+	PortalURL          string // front de Sphere: enlaces y logo de los correos
 
 	WebpushPublicKey  string
 	WebpushPrivateKey string
@@ -106,6 +107,7 @@ func LoadConfig() Config {
 		MailFromEmail:      mailFrom,
 		ContactEmailTo:     contactTo,
 		ContactUpacEmailTo: os.Getenv("CONTACT_UPAC_EMAIL_TO"),
+		PortalURL:          env("PORTAL_URL", "https://dev.sportspherecenter.com/"),
 
 		WebpushPublicKey:  env("WEBPUSH_VAPID_PUBLIC_KEY", "BPUz4LbqWQ37yEGwuCBW-pPzYfBwFzgi0H0xT9pvmV2d0BZaBKZi2UhdfXiEno-Q2OTKRPMm9JWjCRzF90hE8M8"),
 		WebpushPrivateKey: env("WEBPUSH_VAPID_PRIVATE_KEY", "LOmwxfnxRxMobwrCqIOuf6tZYB6HfA0srmBTN0tQkCk"),

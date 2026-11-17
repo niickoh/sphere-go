@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -140,6 +141,48 @@ func pgErrDetail(err error) string {
 }
 
 // POST finanzas/agregar/
+// Tipos de plan: mensualidad (cobro mensual), clase privada (un pago) y pack de clases privadas (un pago).
+const (
+	planMensualidad = "mensualidad"
+	planClase       = "clase"
+	planPack        = "pack"
+)
+
+var tiposPlan = []string{planMensualidad, planClase, planPack}
+
+// datosTipoPlan valida el tipo de plan y devuelve disciplina y cantidad de clases normalizadas.
+// mensualidad: disciplina opcional, sin cantidad · clase: disciplina obligatoria, 1 clase ·
+// pack: disciplina obligatoria y al menos 2 clases.
+func datosTipoPlan(tipoRaw, disciplinaRaw, cantidadRaw any) (tipo string, disciplina, cantidad any, errMsg string) {
+	tipo = strings.ToLower(strings.TrimSpace(pyStr(tipoRaw)))
+	if tipoRaw == nil || tipo == "" {
+		tipo = planMensualidad
+	}
+	if !slices.Contains(tiposPlan, tipo) {
+		return "", nil, nil, "El tipo de plan debe ser mensualidad, clase o pack"
+	}
+	if d := strings.TrimSpace(pyStr(disciplinaRaw)); disciplinaRaw != nil && d != "" {
+		if len([]rune(d)) > 50 {
+			return "", nil, nil, "La disciplina no puede tener más de 50 caracteres"
+		}
+		disciplina = d
+	}
+	switch tipo {
+	case planClase:
+		cantidad = int64(1)
+	case planPack:
+		n, ok := pyInt(cantidadRaw)
+		if !ok || n < 2 || n > 100 {
+			return "", nil, nil, "Un pack debe tener entre 2 y 100 clases"
+		}
+		cantidad = n
+	}
+	if tipo != planMensualidad && disciplina == nil {
+		return "", nil, nil, "Indica la disciplina de las clases privadas"
+	}
+	return tipo, disciplina, cantidad, ""
+}
+
 func (a *App) addSuscriptionsPlans(c *Ctx) {
 	body, err := c.loadsObj()
 	if errors.Is(err, errNotObject) {
@@ -156,10 +199,18 @@ func (a *App) addSuscriptionsPlans(c *Ctx) {
 		c.JSON(400, obj("message", "Todos los campos son obligatorios"))
 		return
 	}
+	tipo, disciplina, cantidad, msg := datosTipoPlan(body["tipo"], body["disciplina"], body["cantidadClases"])
+	if msg != "" {
+		c.JSON(400, obj("message", msg))
+		return
+	}
 	var id int64
-	err = a.db.QueryRow(c.ctx(), `INSERT INTO finanzas_plansuscripciones (id, name, description, price, "interval", "intervalCount", active, "createdAt")
-		VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM finanzas_plansuscripciones), $1::text, $2::text, $3::text::int, $4::text, $5::text::int, $6::text::boolean, $7)
-		RETURNING id`, dbText(name), dbText(description), dbText(price), dbText(interval), dbText(intervalCount), dbText(active), nowUTC()).Scan(&id)
+	err = a.db.QueryRow(c.ctx(), `INSERT INTO finanzas_plansuscripciones (id, name, description, price, "interval", "intervalCount", active, "createdAt",
+		tipo, disciplina, "cantidadClases")
+		VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM finanzas_plansuscripciones), $1::text, $2::text, $3::text::int, $4::text, $5::text::int, $6::text::boolean, $7,
+		$8, $9, $10)
+		RETURNING id`, dbText(name), dbText(description), dbText(price), dbText(interval), dbText(intervalCount), dbText(active), nowUTC(),
+		tipo, disciplina, cantidad).Scan(&id)
 	if err != nil {
 		if isIntegrityErr(err) {
 			if strings.Contains(pgErrText(err), "name") {
@@ -176,13 +227,18 @@ func (a *App) addSuscriptionsPlans(c *Ctx) {
 	c.JSON(200, obj(
 		"message", "Plan de suscripción creado con éxito",
 		"planSuscripcion", obj("id", id, "name", name, "description", description, "price", price,
-			"interval", interval, "intervalCount", intervalCount, "active", active),
+			"interval", interval, "intervalCount", intervalCount, "active", active,
+			"tipo", tipo, "disciplina", disciplina, "cantidadClases", cantidad),
 	))
 }
 
 // GET finanzas/listar/
 func (a *App) listSuscriptionPlans(c *Ctx) {
-	rows, err := a.db.Query(c.ctx(), `SELECT id, name, description, price, "interval", "intervalCount", active FROM finanzas_plansuscripciones`)
+	// "suscripciones": cuántos atletas tienen el plan (sirve para advertir antes de editar el precio o eliminarlo)
+	rows, err := a.db.Query(c.ctx(), `SELECT p.id, p.name, p.description, p.price, p."interval", p."intervalCount", p.active,
+		p.tipo, p.disciplina, p."cantidadClases",
+		(SELECT count(DISTINCT s."userId_id") FROM finanzas_suscripciones s WHERE s."planId_id" = p.id)
+		FROM finanzas_plansuscripciones p ORDER BY p.id`)
 	if err != nil {
 		c.serverError(err)
 		return
@@ -193,12 +249,17 @@ func (a *App) listSuscriptionPlans(c *Ctx) {
 		var id, price, intervalCount int64
 		var name, description, interval string
 		var active bool
-		if err := rows.Scan(&id, &name, &description, &price, &interval, &intervalCount, &active); err != nil {
+		var tipo string
+		var disciplina *string
+		var cantidad *int64
+		var atletas int64
+		if err := rows.Scan(&id, &name, &description, &price, &interval, &intervalCount, &active, &tipo, &disciplina, &cantidad, &atletas); err != nil {
 			c.serverError(err)
 			return
 		}
 		data = append(data, obj("id", id, "name", name, "description", description, "price", price,
-			"interval", interval, "intervalCount", intervalCount, "active", active))
+			"interval", interval, "intervalCount", intervalCount, "active", active,
+			"tipo", tipo, "disciplina", ptrAny(disciplina), "cantidadClases", ptrAny(cantidad), "suscripciones", atletas))
 	}
 	if err := rows.Err(); err != nil {
 		c.serverError(err)
@@ -210,11 +271,14 @@ func (a *App) listSuscriptionPlans(c *Ctx) {
 // PUT finanzas/editar/<int:id>
 func (a *App) editSuscriptionPlans(c *Ctx) {
 	id := c.intParam("id")
-	var name, description, interval string
+	var name, description, interval, tipoActual string
 	var price, intervalCount int64
 	var active bool
-	err := a.db.QueryRow(c.ctx(), `SELECT name, description, price, "interval", "intervalCount", active
-		FROM finanzas_plansuscripciones WHERE id = $1`, id).Scan(&name, &description, &price, &interval, &intervalCount, &active)
+	var disciplinaActual *string
+	var cantidadActual *int64
+	err := a.db.QueryRow(c.ctx(), `SELECT name, description, price, "interval", "intervalCount", active, tipo, disciplina, "cantidadClases"
+		FROM finanzas_plansuscripciones WHERE id = $1`, id).Scan(&name, &description, &price, &interval, &intervalCount, &active,
+		&tipoActual, &disciplinaActual, &cantidadActual)
 	if isNoRows(err) {
 		c.JSON(404, obj("error", "Plan de suscripción no encontrado"))
 		return
@@ -239,10 +303,27 @@ func (a *App) editSuscriptionPlans(c *Ctx) {
 			vals[k] = v
 		}
 	}
+	// Los campos de tipo que no vienen en el cuerpo conservan su valor actual
+	tipoIn, discIn, cantIn := any(tipoActual), any(ptrAny(disciplinaActual)), any(ptrAny(cantidadActual))
+	if v, ok := body["tipo"]; ok {
+		tipoIn = v
+	}
+	if v, ok := body["disciplina"]; ok {
+		discIn = v
+	}
+	if v, ok := body["cantidadClases"]; ok {
+		cantIn = v
+	}
+	tipo, disciplina, cantidad, msg := datosTipoPlan(tipoIn, discIn, cantIn)
+	if msg != "" {
+		c.JSON(400, obj("message", msg))
+		return
+	}
 	_, err = a.db.Exec(c.ctx(), `UPDATE finanzas_plansuscripciones SET name = $1::text, description = $2::text, price = $3::text::int,
-		"interval" = $4::text, "intervalCount" = $5::text::int, active = $6::text::boolean WHERE id = $7`,
+		"interval" = $4::text, "intervalCount" = $5::text::int, active = $6::text::boolean,
+		tipo = $8, disciplina = $9, "cantidadClases" = $10 WHERE id = $7`,
 		dbText(vals["name"]), dbText(vals["description"]), dbTextAny(vals["price"]), dbText(vals["interval"]),
-		dbTextAny(vals["intervalCount"]), dbTextAny(vals["active"]), id)
+		dbTextAny(vals["intervalCount"]), dbTextAny(vals["active"]), id, tipo, disciplina, cantidad)
 	if err != nil {
 		c.serverError(err)
 		return
@@ -250,7 +331,8 @@ func (a *App) editSuscriptionPlans(c *Ctx) {
 	c.JSON(200, obj(
 		"message", "Plan de suscripcion actualizado con éxito",
 		"planSuscripcion", obj("id", id, "name", vals["name"], "description", vals["description"], "price", vals["price"],
-			"interval", vals["interval"], "intervalCount", vals["intervalCount"], "active", vals["active"]),
+			"interval", vals["interval"], "intervalCount", vals["intervalCount"], "active", vals["active"],
+			"tipo", tipo, "disciplina", disciplina, "cantidadClases", cantidad),
 	))
 }
 
@@ -291,6 +373,25 @@ type nuevaSuscripcion struct {
 }
 
 // insertSuscripciones replica Suscripciones.objects.bulk_create (usa la secuencia, no MAX+1).
+// tiposDePlanes devuelve el tipo (mensualidad, clase o pack) de cada plan pedido.
+func (a *App) tiposDePlanes(ctx context.Context, ids []int64) (map[int64]string, error) {
+	rows, err := a.db.Query(ctx, `SELECT id, tipo FROM finanzas_plansuscripciones WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tipos := map[int64]string{}
+	for rows.Next() {
+		var id int64
+		var tipo string
+		if err := rows.Scan(&id, &tipo); err != nil {
+			return nil, err
+		}
+		tipos[id] = tipo
+	}
+	return tipos, rows.Err()
+}
+
 func (a *App) insertSuscripciones(c *Ctx, subs []nuevaSuscripcion) error {
 	if len(subs) == 0 {
 		return nil
@@ -315,6 +416,8 @@ func (a *App) insertSuscripciones(c *Ctx, subs []nuevaSuscripcion) error {
 }
 
 // POST finanzas/asignarPlan/
+// POST finanzas/asignarPlan/: asigna el plan a todos los atletas (perfil principal o adicional)
+// que aún no lo tienen. Así se puede repetir sin duplicar las cuotas de nadie.
 func (a *App) asignPlanUsers(c *Ctx) {
 	v, err := c.loads()
 	if err != nil {
@@ -338,7 +441,29 @@ func (a *App) asignPlanUsers(c *Ctx) {
 	}
 
 	ctx := c.ctx()
-	rows, err := a.db.Query(ctx, `SELECT id FROM usuarios_usuarios WHERE tipo_id = 3`)
+	var plan int64
+	var tipo string
+	err = pgx.ErrNoRows
+	if planID != nil {
+		err = a.db.QueryRow(ctx, `SELECT id, tipo FROM finanzas_plansuscripciones WHERE id = $1::text::int`, dbText(planID)).Scan(&plan, &tipo)
+	}
+	if isNoRows(err) {
+		c.JSON(400, obj("message", "Plan no encontrado"))
+		return
+	}
+	if err != nil {
+		errInesperado(c, err)
+		return
+	}
+
+	var total int
+	if err := a.db.QueryRow(ctx, `SELECT count(*) FROM usuarios_usuarios WHERE tipo_id = $1 OR $1 = ANY(perfiles)`, tipoAtleta).Scan(&total); err != nil {
+		errInesperado(c, err)
+		return
+	}
+	rows, err := a.db.Query(ctx, `SELECT u.id FROM usuarios_usuarios u
+		WHERE (u.tipo_id = $1 OR $1 = ANY(u.perfiles))
+		AND NOT EXISTS (SELECT 1 FROM finanzas_suscripciones s WHERE s."userId_id" = u.id AND s."planId_id" = $2)`, tipoAtleta, plan)
 	if err != nil {
 		errInesperado(c, err)
 		return
@@ -349,31 +474,20 @@ func (a *App) asignPlanUsers(c *Ctx) {
 		return
 	}
 
+	cuotas := totalMeses
+	if tipo != planMensualidad {
+		cuotas = 1 // clases privadas y packs se pagan en una sola cuota
+	}
 	var subs []nuevaSuscripcion
-	if len(atletas) > 0 {
-		var plan int64
-		err := pgx.ErrNoRows
-		if planID != nil {
-			err = a.db.QueryRow(ctx, `SELECT id FROM finanzas_plansuscripciones WHERE id = $1::text::int`, dbText(planID)).Scan(&plan)
-		}
-		if isNoRows(err) {
-			c.JSON(400, obj("message", "Plan no encontrado"))
-			return
-		}
-		if err != nil {
-			errInesperado(c, err)
-			return
-		}
-		for _, uid := range atletas {
-			subs = append(subs, nuevaSuscripcion{userID: uid, planID: plan, status: body["status"], start: body["startDate"],
-				end: body["endDate"], next: body["nextBillingDate"], canceledAt: canceledAt, totalMeses: totalMeses})
-		}
+	for _, uid := range atletas {
+		subs = append(subs, nuevaSuscripcion{userID: uid, planID: plan, status: body["status"], start: body["startDate"],
+			end: body["endDate"], next: body["nextBillingDate"], canceledAt: canceledAt, totalMeses: cuotas})
 	}
 	if err := a.insertSuscripciones(c, subs); err != nil {
 		errInesperado(c, err)
 		return
 	}
-	c.JSON(201, obj("message", "Suscripción(es) creada(s) con éxito"))
+	c.JSON(201, obj("message", "Suscripción(es) creada(s) con éxito", "creadas", len(subs), "yaLoTenian", total-len(subs)))
 }
 
 // POST finanzas/asignarPlanesUser/
@@ -479,6 +593,11 @@ func (a *App) asignarPlanesToUser(c *Ctx) {
 		errInesperado(c, err)
 		return
 	}
+	tipos, err := a.tiposDePlanes(ctx, plans)
+	if err != nil {
+		errInesperado(c, err)
+		return
+	}
 
 	or := func(x, def any) any {
 		if truthy(x) {
@@ -521,6 +640,10 @@ func (a *App) asignarPlanesToUser(c *Ctx) {
 			errInesperado(c, err)
 			return
 		}
+		// Clases privadas y packs se pagan en una sola cuota
+		if tipos[pid] != planMensualidad {
+			s.totalMeses = 1
+		}
 		subs = append(subs, s)
 	}
 	if err := a.insertSuscripciones(c, subs); err != nil {
@@ -530,7 +653,16 @@ func (a *App) asignarPlanesToUser(c *Ctx) {
 	c.JSON(201, obj("message", "Suscripciones creadas con éxito", "created", len(subs)))
 }
 
-// GET finanzas/getSuscription/<int:userId>
+func intOr0(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// GET finanzas/getSuscription/<userId>
+// Un atleta puede tener varias suscripciones a la vez (mensualidad y clases privadas), así que se
+// devuelven todas en "suscripciones". "suscripcion" se mantiene con la primera para clientes antiguos.
 func (a *App) getSuscripcionByUser(c *Ctx) {
 	userID := c.intParam("userId")
 	if !isSelfOrStaff(c.user, userID) {
@@ -539,85 +671,77 @@ func (a *App) getSuscripcionByUser(c *Ctx) {
 	}
 	rows, err := a.db.Query(c.ctx(), `SELECT s.id, s."userId_id", s."planId_id", s.status, s."startDate", s."endDate",
 		s."nextBillingDate", s."canceledAt", s."createdAt", s."totalMeses", s."mesesPagados",
-		p.id, p.name, p.description, p.price, p."interval", p."intervalCount", p.active, p."createdAt"
+		p.id, p.name, p.description, p.price, p."interval", p."intervalCount", p.active, p."createdAt",
+		p.tipo, p.disciplina, p."cantidadClases"
 		FROM finanzas_suscripciones s
 		JOIN usuarios_usuarios u ON u.id = s."userId_id"
 		LEFT JOIN finanzas_plansuscripciones p ON p.id = s."planId_id"
-		WHERE u.id = $1 LIMIT 21`, userID)
+		WHERE u.id = $1 ORDER BY s.id`, userID)
 	if err != nil {
 		errInesperado(c, err)
 		return
 	}
 	defer rows.Close()
 
-	type susc struct {
-		id                       int64
-		userID, planID           *int64
-		status                   string
-		start, end               time.Time
-		next, canceled, created  *time.Time
-		totalMeses, mesesPagados *int64
-		pID, pPrice, pCount      *int64
-		pName, pDesc, pInterval  *string
-		pActive                  *bool
-		pCreated                 *time.Time
-	}
-	var found []susc
+	list := []OM{}
 	for rows.Next() {
-		var s susc
-		if err := rows.Scan(&s.id, &s.userID, &s.planID, &s.status, &s.start, &s.end, &s.next, &s.canceled, &s.created,
-			&s.totalMeses, &s.mesesPagados, &s.pID, &s.pName, &s.pDesc, &s.pPrice, &s.pInterval, &s.pCount, &s.pActive, &s.pCreated); err != nil {
+		var (
+			id                       int64
+			uid, planID              *int64
+			status                   string
+			start, end               time.Time
+			next, canceled, created  *time.Time
+			totalMeses, mesesPagados *int64
+			pID, pPrice, pCount      *int64
+			pName, pDesc, pInterval  *string
+			pActive                  *bool
+			pCreated                 *time.Time
+			pTipo, pDisciplina       *string
+			pClases                  *int64
+		)
+		if err := rows.Scan(&id, &uid, &planID, &status, &start, &end, &next, &canceled, &created,
+			&totalMeses, &mesesPagados, &pID, &pName, &pDesc, &pPrice, &pInterval, &pCount, &pActive, &pCreated,
+			&pTipo, &pDisciplina, &pClases); err != nil {
 			errInesperado(c, err)
 			return
 		}
-		found = append(found, s)
+		var planData any
+		if pID != nil {
+			planData = obj("id", *pID, "name", ptrAny(pName), "description", ptrAny(pDesc), "price", ptrAny(pPrice),
+				"interval", ptrAny(pInterval), "intervalCount", ptrAny(pCount), "active", ptrAny(pActive),
+				"createdAt", pyISOPtr(pCreated), "tipo", ptrAny(pTipo), "disciplina", ptrAny(pDisciplina),
+				"cantidadClases", ptrAny(pClases))
+		}
+		var userData any
+		if uid != nil {
+			userData = obj("id", *uid)
+		}
+		list = append(list, obj(
+			"id", id,
+			"userId", ptrAny(uid),
+			"user", userData,
+			"planId", ptrAny(pID),
+			"plan", planData,
+			"status", status,
+			"startDate", pyISO(start),
+			"endDate", pyISO(end),
+			"nextBillingDate", pyISOPtr(next),
+			"canceledAt", pyISOPtr(canceled),
+			"createdAt", pyISOPtr(created),
+			"totalMeses", ptrAny(totalMeses),
+			"mesesPagados", ptrAny(mesesPagados),
+			"mesesPendientes", max(intOr0(totalMeses)-intOr0(mesesPagados), 0),
+		))
 	}
 	if err := rows.Err(); err != nil {
 		errInesperado(c, err)
 		return
 	}
-	switch {
-	case len(found) == 0:
-		c.JSON(200, obj("message", fmt.Sprintf("Suscripción del usuario con id => %d no encontrada", userID)))
-		return
-	case len(found) > 1:
-		n := fmt.Sprint(len(found))
-		if len(found) > 20 {
-			n = "more than 20"
-		}
-		c.JSON(500, obj("message", "Ocurrió un error inesperado",
-			"detail", fmt.Sprintf("get() returned more than one Suscripciones -- it returned %s!", n)))
+	if len(list) == 0 {
+		c.JSON(200, obj("message", fmt.Sprintf("Suscripción del usuario con id => %d no encontrada", userID), "suscripciones", list))
 		return
 	}
-	s := found[0]
-	var planData any
-	if s.pID != nil {
-		planData = obj("id", *s.pID, "name", ptrAny(s.pName), "description", ptrAny(s.pDesc), "price", ptrAny(s.pPrice),
-			"interval", ptrAny(s.pInterval), "intervalCount", ptrAny(s.pCount), "active", ptrAny(s.pActive),
-			"createdAt", pyISOPtr(s.pCreated))
-	}
-	var userData any
-	if s.userID != nil {
-		userData = obj("id", *s.userID)
-	}
-	c.JSON(200, obj(
-		"message", "Suscripción encontrada con éxito",
-		"suscripcion", obj(
-			"id", s.id,
-			"userId", ptrAny(s.userID),
-			"user", userData,
-			"planId", ptrAny(s.pID),
-			"plan", planData,
-			"status", s.status,
-			"startDate", pyISO(s.start),
-			"endDate", pyISO(s.end),
-			"nextBillingDate", pyISOPtr(s.next),
-			"canceledAt", pyISOPtr(s.canceled),
-			"createdAt", pyISOPtr(s.created),
-			"totalMeses", ptrAny(s.totalMeses),
-			"mesesPagados", ptrAny(s.mesesPagados),
-		),
-	))
+	c.JSON(200, obj("message", "Suscripción encontrada con éxito", "suscripcion", list[0], "suscripciones", list))
 }
 
 // ---------- finanzas.views: pagos ----------

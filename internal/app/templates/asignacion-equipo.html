@@ -1,0 +1,19 @@
+{{template "head" .}}
+              <p style="margin:0 0 16px;">Hola <strong>{{v .NOMBRE}}</strong>,</p>
+              <p style="margin:0 0 20px;">Fuiste asignado/a a un equipo{{if t .CLUB}} de <strong>{{v .CLUB}}</strong>{{end}}. ¡Bienvenido/a!</p>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #cce9f7; border-radius:10px;">
+                <tr>
+                  <td width="10" bgcolor="{{v .COLOR}}" style="width:10px; background:{{v .COLOR}}; border-radius:10px 0 0 10px;">&nbsp;</td>
+                  <td style="padding:18px 20px;">
+                    <div style="font-size:12px; letter-spacing:1px; text-transform:uppercase; color:#4f6b80;">Equipo</div>
+                    <div style="font-size:22px; font-weight:bold; color:#0f2a3d;">{{v .EQUIPO}}</div>
+                    {{if t .ROL}}<div style="margin-top:8px; font-size:14px;">Tu rol: <strong>{{v .ROL}}</strong></div>{{end}}
+                    {{if t .ENTRENADOR}}<div style="margin-top:4px; font-size:14px;">Entrenador/a: <strong>{{v .ENTRENADOR}}</strong></div>{{end}}
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:18px 0 0;">Desde la plataforma podrás ver el calendario de entrenamientos, avisos y novedades del equipo.</p>
+{{template "boton" .}}
+{{template "foot" .}}

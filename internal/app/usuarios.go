@@ -19,12 +19,13 @@ import (
 
 // GET usuarios/listar/
 func (a *App) listarUsuarios(c *Ctx) {
-	q := `SELECT u.id, u.name, u.username, u.email, t.description, t.id
+	q := `SELECT u.id, u.name, u.username, u.email, t.description, t.id, u.perfiles
 		FROM usuarios_usuarios u LEFT JOIN usuarios_tipousuario t ON t.id = u.tipo_id`
 	var args []any
 	if tipoQ := c.r.URL.Query().Get("tipo"); tipoQ != "" {
 		if n, ok := pyInt(tipoQ); ok {
-			q += ` WHERE u.tipo_id = $1`
+			// Incluye a quienes tienen el rol como perfil adicional (p. ej. un coach que también es atleta)
+			q += ` WHERE u.tipo_id = $1 OR $1 = ANY(u.perfiles)`
 			args = append(args, n)
 		} else {
 			q += ` WHERE t.description ILIKE $1 ESCAPE '\'`
@@ -43,18 +44,60 @@ func (a *App) listarUsuarios(c *Ctx) {
 		var name, username, email string
 		var tipo *string
 		var tipoID *int64
-		if err := rows.Scan(&id, &name, &username, &email, &tipo, &tipoID); err != nil {
+		var perfiles []int64
+		if err := rows.Scan(&id, &name, &username, &email, &tipo, &tipoID, &perfiles); err != nil {
 			c.serverError(err)
 			return
 		}
 		data = append(data, obj("id", id, "name", name, "username", username, "email", email,
-			"tipo", ptrAny(tipo), "tipo_id", ptrAny(tipoID)))
+			"tipo", ptrAny(tipo), "tipo_id", ptrAny(tipoID), "perfiles", perfilesJSON(perfiles)))
 	}
 	if err := rows.Err(); err != nil {
 		c.serverError(err)
 		return
 	}
 	c.JSON(200, data)
+}
+
+// perfilesJSON devuelve siempre una lista (nunca null) para el front.
+func perfilesJSON(p []int64) []int64 {
+	if p == nil {
+		return []int64{}
+	}
+	return p
+}
+
+// perfilesAdicionales valida los perfiles adicionales pedidos: que existan, sin repetir y distintos
+// del perfil principal (que es el que da los permisos). Devuelve un mensaje si algo no es válido.
+func (a *App) perfilesAdicionales(ctx context.Context, raw any, principal int64) ([]int64, string, error) {
+	if raw == nil {
+		return []int64{}, "", nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, "perfiles debe ser una lista de tipos de usuario", nil
+	}
+	out := []int64{}
+	for _, v := range list {
+		n, ok := pyInt(v)
+		if !ok {
+			return nil, "perfiles debe ser una lista de tipos de usuario", nil
+		}
+		if n != principal && !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	if len(out) == 0 {
+		return out, "", nil
+	}
+	var existentes int
+	if err := a.db.QueryRow(ctx, `SELECT count(*) FROM usuarios_tipousuario WHERE id = ANY($1)`, out).Scan(&existentes); err != nil {
+		return nil, "", err
+	}
+	if existentes != len(out) {
+		return nil, "Alguno de los perfiles adicionales no existe", nil
+	}
+	return out, "", nil
 }
 
 func likeEscape(s string) string {
@@ -122,12 +165,22 @@ func (a *App) addUsuario(c *Ctx) {
 		return
 	}
 
-	cols := `password, last_login, is_superuser, name, username, email, tipo_id, is_active, is_staff`
-	vals := `$1, NULL, false, $2::text, $3::text, $4::text, $5, true, false`
-	args := []any{makePassword(pyStr(password)), dbText(name), dbText(username), dbText(email), tipoPK}
+	perfiles, msg, err := a.perfilesAdicionales(c.ctx(), body["perfiles"], tipoPK)
+	if err != nil {
+		c.serverError(err)
+		return
+	}
+	if msg != "" {
+		c.JSON(400, obj("error", msg))
+		return
+	}
+
+	cols := `password, last_login, is_superuser, name, username, email, tipo_id, is_active, is_staff, perfiles`
+	vals := `$1, NULL, false, $2::text, $3::text, $4::text, $5, true, false, $6`
+	args := []any{makePassword(pyStr(password)), dbText(name), dbText(username), dbText(email), tipoPK, perfiles}
 	if a.schema.userDateJoined {
 		cols += `, date_joined`
-		vals += `, $6`
+		vals += `, $7`
 		args = append(args, nowUTC())
 	}
 	var id int64
@@ -150,7 +203,8 @@ func (a *App) addUsuario(c *Ctx) {
 	}
 	c.JSON(201, obj(
 		"message", "Usuario creado exitosamente",
-		"usuario", obj("id", id, "name", name, "username", username, "email", email, "tipo", ptrAny(tipoDesc)),
+		"usuario", obj("id", id, "name", name, "username", username, "email", email, "tipo", ptrAny(tipoDesc),
+			"tipo_id", tipoPK, "perfiles", perfiles),
 	))
 }
 
@@ -235,6 +289,7 @@ func (a *App) editUsuario(c *Ctx) {
 	}
 	tipoDesc := u.TipoDesc
 	hasTipo := u.TipoID != nil
+	principal := u.tipo()
 	if v, ok := body["tipo_id"]; ok && isAdmin(c.user) {
 		var tid int64
 		var desc *string
@@ -250,8 +305,32 @@ func (a *App) editUsuario(c *Ctx) {
 			c.serverError(err)
 			return
 		}
-		tipoDesc, hasTipo = desc, true
+		// El perfil principal da los permisos: nadie puede cambiarse el suyo (un administrador perdería el acceso)
+		if c.user.ID == id && tid != u.tipo() {
+			c.JSON(400, obj("error", "No puedes cambiar tu propio perfil principal"))
+			return
+		}
+		tipoDesc, hasTipo, principal = desc, true, tid
 		set("tipo_id", tid)
+	}
+	// Perfiles adicionales: solo un administrador los cambia. Si cambió el principal y no se enviaron,
+	// se quita el nuevo principal de los adicionales para no repetirlo.
+	perfiles := u.Perfiles
+	if v, ok := body["perfiles"]; ok && isAdmin(c.user) {
+		p, msg, err := a.perfilesAdicionales(c.ctx(), v, principal)
+		if err != nil {
+			c.serverError(err)
+			return
+		}
+		if msg != "" {
+			c.JSON(400, obj("error", msg))
+			return
+		}
+		perfiles = p
+		set("perfiles", p)
+	} else if principal != u.tipo() && slices.Contains(u.Perfiles, principal) {
+		perfiles = slices.DeleteFunc(slices.Clone(u.Perfiles), func(r int64) bool { return r == principal })
+		set("perfiles", perfiles)
 	}
 	if len(sets) > 0 {
 		args = append(args, id)
@@ -267,7 +346,8 @@ func (a *App) editUsuario(c *Ctx) {
 	}
 	c.JSON(200, obj(
 		"message", "Usuario actualizado exitosamente",
-		"usuario", obj("id", u.ID, "name", name, "username", username, "email", email, "tipo", tipo),
+		"usuario", obj("id", u.ID, "name", name, "username", username, "email", email, "tipo", tipo,
+			"tipo_id", principal, "perfiles", perfilesJSON(perfiles)),
 	))
 }
 
@@ -491,7 +571,8 @@ func (a *App) login(c *Ctx) {
 	}
 	resp := obj(
 		"message", "Inicio de sesión exitoso",
-		"usuario", obj("id", u.ID, "name", u.Name, "username", u.Username, "email", u.Email, "tipo", tipo, "tipo_id", tipoID),
+		"usuario", obj("id", u.ID, "name", u.Name, "username", u.Username, "email", u.Email, "tipo", tipo, "tipo_id", tipoID,
+			"perfiles", perfilesJSON(u.Perfiles)),
 		"token_info", obj(
 			"access_token_expires_in", maxAgeAccess,
 			"refresh_token_expires_in", maxAgeRefresh,
@@ -524,7 +605,8 @@ func (a *App) logout(c *Ctx) {
 // GET usuarios/me/
 func (a *App) me(c *Ctx) {
 	u := c.user
-	c.JSON(200, obj("id", u.ID, "name", u.Name, "username", u.Username, "email", u.Email, "tipo_id", ptrAny(u.TipoID)))
+	c.JSON(200, obj("id", u.ID, "name", u.Name, "username", u.Username, "email", u.Email, "tipo_id", ptrAny(u.TipoID),
+		"perfiles", perfilesJSON(u.Perfiles)))
 }
 
 // POST auth/refresh/

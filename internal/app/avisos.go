@@ -17,11 +17,18 @@ import (
 
 // GET avisos/listar/
 func (a *App) listarAvisos(c *Ctx) {
-	rows, err := a.db.Query(c.ctx(), `SELECT av.id, av.titulo, av.contenido, av.creado_por_id, u.name, t.description, av.fecha_creacion
+	// Quien gestiona el club (admin, coach, staff) ve todos los avisos; el resto, solo los dirigidos a él
+	q := `SELECT av.id, av.titulo, av.contenido, av.creado_por_id, u.name, t.description, av.fecha_creacion, av.audiencia,
+		(SELECT count(*) FROM avisos_avisodestinatario d WHERE d."idAviso_id" = av.id)
 		FROM avisos_aviso av
 		LEFT JOIN usuarios_usuarios u ON u.id = av.creado_por_id
-		LEFT JOIN usuarios_tipousuario t ON t.id = u.tipo_id
-		ORDER BY av.fecha_creacion DESC`)
+		LEFT JOIN usuarios_tipousuario t ON t.id = u.tipo_id`
+	var args []any
+	if !isClubViewer(c.user) {
+		q += ` WHERE EXISTS (SELECT 1 FROM avisos_avisodestinatario d WHERE d."idAviso_id" = av.id AND d."idUser_id" = $1)`
+		args = append(args, c.user.ID)
+	}
+	rows, err := a.db.Query(c.ctx(), q+` ORDER BY av.fecha_creacion DESC`, args...)
 	if err != nil {
 		c.serverError(err)
 		return
@@ -34,12 +41,15 @@ func (a *App) listarAvisos(c *Ctx) {
 		var creadoPor *int64
 		var nombre, rol *string
 		var fecha time.Time
-		if err := rows.Scan(&id, &titulo, &contenido, &creadoPor, &nombre, &rol, &fecha); err != nil {
+		var audiencia *string
+		var destinatarios int64
+		if err := rows.Scan(&id, &titulo, &contenido, &creadoPor, &nombre, &rol, &fecha, &audiencia, &destinatarios); err != nil {
 			c.serverError(err)
 			return
 		}
 		data = append(data, obj("id", id, "titulo", titulo, "contenido", contenido, "creado_por", ptrAny(creadoPor),
-			"creado_por_nombre", ptrAny(nombre), "creado_por_rol", ptrAny(rol), "fecha_creacion", drfISO(fecha)))
+			"creado_por_nombre", ptrAny(nombre), "creado_por_rol", ptrAny(rol), "fecha_creacion", drfISO(fecha),
+			"audiencia", ptrAny(audiencia), "destinatarios", destinatarios))
 	}
 	if err := rows.Err(); err != nil {
 		c.serverError(err)
@@ -68,7 +78,20 @@ func (a *App) addAviso(c *Ctx) {
 	targetAll := truthy(body["target_all"])
 	userIDs := body["user_ids"]
 	if !truthy(userIDs) {
+		// El front antiguo enviaba "users_ids" (nombre del modelo)
+		userIDs = body["users_ids"]
+	}
+	if !truthy(userIDs) {
 		userIDs = []any{}
+	}
+	var audiencia any
+	if s := strings.TrimSpace(pyStr(body["audiencia"])); body["audiencia"] != nil && s != "" {
+		if r := []rune(s); len(r) > 200 {
+			s = string(r[:200])
+		}
+		audiencia = s
+	} else if targetAll {
+		audiencia = "Todo el club"
 	}
 	if !truthy(titulo) || !truthy(contenido) {
 		c.JSON(400, obj("message", "titulo y contenido son obligatorios"))
@@ -76,8 +99,20 @@ func (a *App) addAviso(c *Ctx) {
 	}
 	// request.user siempre es un Usuarios autenticado (IsClubAdmin), así que no se usa creado_por del body
 	creador := c.user.ID
-	if !targetAll && !truthy(userIDs) {
-		c.JSON(400, obj("message", "Debes indicar destinatarios: target_all, user_ids, group_ids o role_ids"))
+	// Equipos: el aviso llega a todos sus integrantes (deportistas, coaches y staff)
+	teamIDs := []int64{}
+	if raw, ok := body["team_ids"].([]any); ok {
+		for _, x := range raw {
+			n, ok := pyInt(x)
+			if !ok {
+				c.JSON(400, obj("message", "team_ids debe ser una lista de equipos"))
+				return
+			}
+			teamIDs = append(teamIDs, n)
+		}
+	}
+	if !targetAll && !truthy(userIDs) && len(teamIDs) == 0 {
+		c.JSON(400, obj("message", "Debes indicar destinatarios: target_all, team_ids o user_ids"))
 		return
 	}
 
@@ -94,8 +129,8 @@ func (a *App) addAviso(c *Ctx) {
 
 	var avisoID int64
 	var fecha time.Time
-	err = tx.QueryRow(ctx, `INSERT INTO avisos_aviso (titulo, contenido, creado_por_id, fecha_creacion)
-		VALUES ($1::text, $2::text, $3, $4) RETURNING id, fecha_creacion`, dbText(titulo), dbText(contenido), creador, nowUTC()).Scan(&avisoID, &fecha)
+	err = tx.QueryRow(ctx, `INSERT INTO avisos_aviso (titulo, contenido, creado_por_id, fecha_creacion, audiencia)
+		VALUES ($1::text, $2::text, $3, $4, $5) RETURNING id, fecha_creacion`, dbText(titulo), dbText(contenido), creador, nowUTC(), audiencia).Scan(&avisoID, &fecha)
 	if err != nil {
 		fail(err)
 		return
@@ -115,6 +150,12 @@ func (a *App) addAviso(c *Ctx) {
 	}
 	if targetAll {
 		if err := addIDs(`SELECT id FROM usuarios_usuarios`); err != nil {
+			fail(err)
+			return
+		}
+	}
+	if len(teamIDs) > 0 {
+		if err := addIDs(`SELECT DISTINCT "idUser_id" FROM usuarios_usersteams WHERE "idTeam_id" = ANY($1) AND "idUser_id" IS NOT NULL`, teamIDs); err != nil {
 			fail(err)
 			return
 		}
@@ -140,12 +181,8 @@ func (a *App) addAviso(c *Ctx) {
 		}
 	}
 	if len(recipients) == 0 {
-		// Como en Django: el return ocurre dentro de transaction.atomic, así que el aviso queda guardado
-		if err := tx.Commit(ctx); err != nil {
-			fail(err)
-			return
-		}
-		c.JSON(400, obj("message", "No se encontraron destinatarios válidos"))
+		// Sin destinatarios no se guarda el aviso (la transacción se descarta)
+		c.JSON(400, obj("message", "No se encontraron destinatarios: los equipos elegidos no tienen integrantes"))
 		return
 	}
 
@@ -171,7 +208,7 @@ func (a *App) addAviso(c *Ctx) {
 	c.JSON(201, obj(
 		"message", "Aviso creado con éxito",
 		"aviso", obj("id", avisoID, "titulo", titulo, "contenido", contenido, "creado_por", creador,
-			"fecha_creacion", drfISO(fecha), "destinatarios_creados", len(ids)),
+			"fecha_creacion", drfISO(fecha), "destinatarios_creados", len(ids), "audiencia", audiencia),
 		"metrics", metrics,
 	))
 }

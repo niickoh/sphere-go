@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -37,14 +38,23 @@ type User struct {
 	TipoID   *int64
 	TipoDesc *string
 	IsActive bool
+	// Perfiles adicionales (p. ej. un coach que también es atleta). No dan permisos: los permisos
+	// salen siempre de TipoID, el perfil principal.
+	Perfiles []int64
 }
 
-const userSelect = `SELECT u.id, u.name, u.username, u.email, u.tipo_id, t.description, u.is_active
+// tieneRol indica si el usuario tiene el rol como perfil principal o adicional
+// (para funciones del rol, no para permisos).
+func (u *User) tieneRol(rol int64) bool {
+	return u != nil && (u.tipo() == rol || slices.Contains(u.Perfiles, rol))
+}
+
+const userSelect = `SELECT u.id, u.name, u.username, u.email, u.tipo_id, t.description, u.is_active, u.perfiles
 	FROM usuarios_usuarios u LEFT JOIN usuarios_tipousuario t ON t.id = u.tipo_id`
 
 func scanUser(row pgx.Row) (*User, error) {
 	u := &User{}
-	if err := row.Scan(&u.ID, &u.Name, &u.Username, &u.Email, &u.TipoID, &u.TipoDesc, &u.IsActive); err != nil {
+	if err := row.Scan(&u.ID, &u.Name, &u.Username, &u.Email, &u.TipoID, &u.TipoDesc, &u.IsActive, &u.Perfiles); err != nil {
 		return nil, err
 	}
 	return u, nil

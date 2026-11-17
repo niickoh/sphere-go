@@ -108,9 +108,22 @@ func (a *App) crearTransaccion(c *Ctx) {
 	ctx := c.ctx()
 	var suscID int64
 	var planID, price, totalMeses, mesesPagados *int64
-	err := a.db.QueryRow(ctx, `SELECT s.id, p.id, p.price, s."totalMeses", s."mesesPagados"
+	// Con varias suscripciones (mensualidad y clases privadas) el front indica cuál paga en "suscripcion_id".
+	// Sin ese dato se usa la primera, como antes. Siempre debe ser una suscripción del propio usuario.
+	q := `SELECT s.id, p.id, p.price, s."totalMeses", s."mesesPagados"
 		FROM finanzas_suscripciones s LEFT JOIN finanzas_plansuscripciones p ON p.id = s."planId_id"
-		WHERE s."userId_id" = $1 ORDER BY s.id LIMIT 1`, c.user.ID).Scan(&suscID, &planID, &price, &totalMeses, &mesesPagados)
+		WHERE s."userId_id" = $1`
+	args := []any{c.user.ID}
+	if raw, ok := data["suscripcion_id"]; ok && raw != nil {
+		sid, ok := pyInt(raw)
+		if !ok {
+			c.JSON(400, obj("message", "suscripcion_id inválido"))
+			return
+		}
+		q += ` AND s.id = $2`
+		args = append(args, sid)
+	}
+	err := a.db.QueryRow(ctx, q+` ORDER BY s.id LIMIT 1`, args...).Scan(&suscID, &planID, &price, &totalMeses, &mesesPagados)
 	if isNoRows(err) || (err == nil && planID == nil) {
 		c.JSON(404, obj("message", "No tienes una suscripción activa"))
 		return
@@ -129,6 +142,10 @@ func (a *App) crearTransaccion(c *Ctx) {
 	meses, ok := pyInt(data["meses"])
 	if !ok {
 		meses = 0
+	}
+	if pendientes == 0 {
+		c.JSON(400, obj("message", "Esta suscripción no tiene pagos pendientes"))
+		return
 	}
 	if meses < 1 || meses > pendientes {
 		c.JSON(400, obj("message", fmt.Sprintf("Debes pagar entre 1 y %d meses", pendientes)))

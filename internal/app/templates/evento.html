@@ -1,0 +1,33 @@
+{{template "head" .}}
+              <p style="margin:0 0 16px;">Hola <strong>{{v .NOMBRE}}</strong>,</p>
+              <p style="margin:0 0 18px;">{{v .INTRO}}</p>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                     style="border:1px solid #cce9f7; border-radius:10px; overflow:hidden;">
+                <tr>
+                  <td colspan="2" bgcolor="#e6f4fb" style="padding:14px 18px; background:#e6f4fb;">
+                    <span style="display:inline-block; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:bold; letter-spacing:1px; text-transform:uppercase; color:#ffffff; background:{{v .ESTADO_COLOR}};">{{v .TIPO}}</span>
+                    <div style="margin-top:8px; font-size:18px; font-weight:bold; color:#0f2a3d;{{if t .CANCELADO}} text-decoration:line-through;{{end}}">{{v .TITULO}}</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:12px 18px 6px; width:110px; color:#4f6b80; font-size:14px; vertical-align:top;">Inicio</td>
+                  <td style="padding:12px 18px 6px; font-size:14px; font-weight:bold;">{{v (fecha .FECHA_INICIO)}}</td>
+                </tr>
+                {{if t .FECHA_FIN}}<tr>
+                  <td style="padding:6px 18px; color:#4f6b80; font-size:14px; vertical-align:top;">Término</td>
+                  <td style="padding:6px 18px; font-size:14px;">{{v (fecha .FECHA_FIN)}}</td>
+                </tr>{{end}}
+                {{if t .UBICACION}}<tr>
+                  <td style="padding:6px 18px; color:#4f6b80; font-size:14px; vertical-align:top;">Lugar</td>
+                  <td style="padding:6px 18px; font-size:14px;">{{v .UBICACION}}</td>
+                </tr>{{end}}
+                {{if t .EQUIPO}}<tr>
+                  <td style="padding:6px 18px 14px; color:#4f6b80; font-size:14px; vertical-align:top;">Equipo</td>
+                  <td style="padding:6px 18px 14px; font-size:14px;">{{v .EQUIPO}}</td>
+                </tr>{{end}}
+              </table>
+
+              {{if t .DESCRIPCION}}<div style="margin-top:18px; padding:14px 18px; background:#f4fafd; border-left:4px solid #359FD8; border-radius:8px; white-space:pre-wrap;">{{v .DESCRIPCION}}</div>{{end}}
+{{if t .URL}}{{template "boton" .}}{{end}}
+{{template "foot" .}}

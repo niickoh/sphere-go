@@ -17,8 +17,11 @@ info:
     que el navegador tenga una sesión del IAM (cookie del BFF en `.sportspherecenter.com`) del
     mismo usuario; inicia sesión primero en el front para tener esa cookie.
 
-    **Permisos.** *Autenticado*: cualquier usuario con sesión. *Staff*: administrador (tipo 1) o
-    entrenador (tipo 2). *Admin*: solo administrador (tipo 1).
+    **Permisos.** *Autenticado*: cualquier usuario con sesión. *Lectura*: administrador (tipo 1),
+    entrenador (tipo 2) o staff (tipo 4, ve lo mismo que un entrenador sin crear ni editar).
+    *Staff*: administrador o entrenador. *Admin*: solo administrador. Los permisos salen siempre
+    del perfil principal (`tipo_id`); los `perfiles` adicionales solo suman las funciones de ese
+    rol (p. ej. un entrenador que también es atleta puede tener planes y pagarlos).
 
     **Ojo:** los endpoints de `apiMail` envían correos reales con Mailjet, `avisos/add` envía
     notificaciones push reales y `transbank` usa el ambiente de integración (pruebas) de Webpay.
@@ -78,6 +81,7 @@ paths:
                       email: { type: string }
                       tipo: { type: string, nullable: true, example: Administrador }
                       tipo_id: { type: integer, nullable: true, example: 1 }
+                      perfiles: { $ref: '#/components/schemas/Perfiles' }
                   token_info: { $ref: '#/components/schemas/TokenInfo' }
         '401':
           description: Usuario inexistente o sesión del IAM inválida.
@@ -130,11 +134,13 @@ paths:
   /usuarios/listar/:
     get:
       tags: [usuarios]
-      summary: Listar usuarios (staff)
+      summary: Listar usuarios (lectura)
       parameters:
         - name: tipo
           in: query
-          description: ID del tipo de usuario, o parte de su descripción (p. ej. `atleta`).
+          description: |
+            ID del tipo de usuario, o parte de su descripción (p. ej. `atleta`). Con un ID también
+            incluye a quienes tienen ese rol como perfil adicional.
           schema: { type: string }
       responses:
         '200':
@@ -152,6 +158,7 @@ paths:
                     email: { type: string }
                     tipo: { type: string, nullable: true }
                     tipo_id: { type: integer, nullable: true }
+                    perfiles: { $ref: '#/components/schemas/Perfiles' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
 
@@ -171,7 +178,8 @@ paths:
                 username: { type: string, example: juanperez }
                 email: { type: string, example: juan@example.com }
                 password: { type: string, example: Clave123 }
-                tipo_id: { type: integer, example: 3, description: '1 admin, 2 entrenador, 3 atleta' }
+                tipo_id: { type: integer, example: 3, description: 'Perfil principal (da los permisos): 1 admin, 2 entrenador, 3 atleta, 4 staff' }
+                perfiles: { type: array, items: { type: integer }, example: [], description: 'Opcional. Perfiles adicionales; se ignoran el principal y los repetidos.' }
       responses:
         '201':
           description: Usuario creado.
@@ -189,8 +197,10 @@ paths:
                       username: { type: string }
                       email: { type: string }
                       tipo: { type: string, nullable: true }
+                      tipo_id: { type: integer }
+                      perfiles: { $ref: '#/components/schemas/Perfiles' }
         '400':
-          description: Faltan campos, o el email o el username ya existen.
+          description: Faltan campos, el email o el username ya existen, o algún perfil adicional no existe.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -219,7 +229,9 @@ paths:
       summary: Editar usuario
       description: |
         El propio usuario o un admin. Solo se cambian los campos enviados.
-        `username` y `tipo_id` solo los puede cambiar un admin (si no, se ignoran).
+        `username`, `tipo_id` y `perfiles` solo los puede cambiar un admin (si no, se ignoran).
+        Nadie puede cambiar su propio perfil principal. Si cambia el principal y no se envían
+        `perfiles`, el nuevo principal se quita de los adicionales.
       parameters: [ { $ref: '#/components/parameters/id' } ]
       requestBody:
         required: true
@@ -233,6 +245,7 @@ paths:
                 email: { type: string }
                 password: { type: string }
                 tipo_id: { type: integer }
+                perfiles: { type: array, items: { type: integer }, description: Reemplaza los perfiles adicionales. }
       responses:
         '200':
           description: Usuario actualizado.
@@ -250,6 +263,13 @@ paths:
                       username: { type: string }
                       email: { type: string }
                       tipo: { type: string, nullable: true }
+                      tipo_id: { type: integer, nullable: true }
+                      perfiles: { $ref: '#/components/schemas/Perfiles' }
+        '400':
+          description: Intento de cambiar el propio perfil principal, o algún perfil adicional no existe.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '403':
           description: No es el propio usuario ni un admin.
           content:
@@ -279,6 +299,7 @@ paths:
                   username: { type: string }
                   email: { type: string }
                   tipo_id: { type: integer, nullable: true }
+                  perfiles: { $ref: '#/components/schemas/Perfiles' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
 
   /usuarios/datosMedicos/{idUser}:
@@ -511,6 +532,9 @@ paths:
                         name: { type: string }
                         username: { type: string }
                         email: { type: string }
+                        tipo_id: { type: integer, nullable: true, description: Perfil principal, para agrupar deportistas, entrenadores y staff. }
+                        tipo: { type: string, nullable: true }
+                        perfiles: { $ref: '#/components/schemas/Perfiles' }
         '404':
           description: El equipo no existe.
           content:
@@ -629,24 +653,56 @@ paths:
     post:
       tags: [eventos]
       summary: Crear evento (admin)
+      description: |
+        El título se recorta (máx. 200 caracteres), el equipo debe existir y el término debe ser
+        posterior al inicio. Sin `tipo` queda como `Entrenamiento`.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [equipo_id, titulo, fecha_inicio, fecha_fin]
-              properties:
-                equipo_id: { type: integer, example: 1 }
-                titulo: { type: string, example: Entrenamiento semanal }
-                descripcion: { type: string, example: '' }
-                tipo: { $ref: '#/components/schemas/TipoEvento' }
-                fecha_inicio: { type: string, format: date-time, example: '2026-11-01T18:00:00Z' }
-                fecha_fin: { type: string, format: date-time, example: '2026-11-01T20:00:00Z' }
-                ubicacion: { type: string, example: Gimnasio }
+              allOf:
+                - type: object
+                  required: [equipo_id, titulo, fecha_inicio, fecha_fin]
+                - $ref: '#/components/schemas/EventoInput'
       responses:
-        '200': { $ref: '#/components/responses/Mensaje' }
-        '500': { description: 'Falta un campo obligatorio o una fecha no es válida (igual que en Django).' }
+        '200': &eventoGuardado
+          description: Evento guardado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Evento creado exitosamente }
+                  id: { type: integer }
+        '400': &eventoInvalido
+          description: Datos inválidos (falta el título, el equipo no existe, fechas incompletas o término antes del inicio).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+              example: { message: El término debe ser posterior al inicio }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /eventos/editEvento/{id}:
+    put:
+      tags: [eventos]
+      summary: Editar evento (admin)
+      description: Solo cambian los campos enviados; el resto conserva su valor. Se validan igual que al crear.
+      parameters: [ { $ref: '#/components/parameters/id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventoInput' }
+      responses:
+        '200': *eventoGuardado
+        '400': *eventoInvalido
+        '404':
+          description: El evento no existe.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
 
@@ -694,7 +750,7 @@ paths:
                   message: { type: string, example: Plan de suscripción creado con éxito }
                   planSuscripcion: { $ref: '#/components/schemas/Plan' }
         '400':
-          description: Faltan campos o el nombre ya existe.
+          description: Faltan campos, el nombre ya existe, o `tipo`/`disciplina`/`cantidadClases` no son válidos.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -722,6 +778,11 @@ paths:
                 properties:
                   message: { type: string }
                   planSuscripcion: { $ref: '#/components/schemas/Plan' }
+        '400':
+          description: '`tipo`, `disciplina` o `cantidadClases` no son válidos.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
@@ -741,14 +802,26 @@ paths:
     post:
       tags: [finanzas]
       summary: Asignar un plan a todos los atletas (admin)
-      description: Crea una suscripción para cada usuario de tipo 3 (atleta).
+      description: |
+        Crea una suscripción para cada atleta (perfil principal o adicional) que aún no tiene el
+        plan, así que se puede repetir sin duplicar cuotas. Las mensualidades se cobran en tantas
+        cuotas como meses haya entre `startDate` y `endDate`; clases y packs, en una sola.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/SuscripcionInput' }
       responses:
-        '201': { $ref: '#/components/responses/Mensaje' }
+        '201':
+          description: Suscripciones creadas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Suscripción(es) creada(s) con éxito }
+                  creadas: { type: integer, description: Atletas que recibieron el plan. }
+                  yaLoTenian: { type: integer, description: Atletas que ya lo tenían y se omitieron. }
         '400':
           description: JSON inválido o plan inexistente.
           content:
@@ -763,7 +836,8 @@ paths:
       summary: Asignar planes a usuarios específicos (admin)
       description: |
         Los campos del nivel superior son valores por defecto; cada item de `suscripciones`
-        puede sobrescribirlos. `userId` es obligatorio en cada item.
+        puede sobrescribirlos. `userId` es obligatorio en cada item. Clases y packs se cobran
+        en una sola cuota.
       requestBody:
         required: true
         content:
@@ -804,40 +878,23 @@ paths:
   /finanzas/getSuscription/{userId}:
     get:
       tags: [finanzas]
-      summary: Suscripción de un usuario
-      description: El propio usuario o staff. Responde 500 si el usuario tiene más de una suscripción (igual que Django).
+      summary: Suscripciones de un usuario
+      description: |
+        El propio usuario o staff. Un atleta puede tener varias a la vez (mensualidad y clases
+        privadas): vienen todas en `suscripciones`. `suscripcion` trae la primera, para clientes antiguos.
       parameters:
         - { name: userId, in: path, required: true, schema: { type: integer } }
       responses:
         '200':
-          description: Suscripción encontrada, o solo `message` si no tiene.
+          description: Suscripciones del usuario. Si no tiene, solo `message` y `suscripciones` vacía.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  message: { type: string }
-                  suscripcion:
-                    type: object
-                    properties:
-                      id: { type: integer }
-                      userId: { type: integer }
-                      user: { type: object, properties: { id: { type: integer } } }
-                      planId: { type: integer, nullable: true }
-                      plan:
-                        allOf:
-                          - $ref: '#/components/schemas/Plan'
-                          - type: object
-                            properties:
-                              createdAt: { type: string, format: date-time, nullable: true }
-                      status: { type: string }
-                      startDate: { type: string, format: date-time }
-                      endDate: { type: string, format: date-time }
-                      nextBillingDate: { type: string, format: date-time, nullable: true }
-                      canceledAt: { type: string, format: date-time, nullable: true }
-                      createdAt: { type: string, format: date-time, nullable: true }
-                      totalMeses: { type: integer, nullable: true }
-                      mesesPagados: { type: integer, nullable: true }
+                  message: { type: string, example: Suscripción encontrada con éxito }
+                  suscripcion: { $ref: '#/components/schemas/Suscripcion' }
+                  suscripciones: { type: array, items: { $ref: '#/components/schemas/Suscripcion' } }
         '403':
           description: Sin permiso sobre ese usuario.
           content:
@@ -928,8 +985,10 @@ paths:
       tags: [transbank]
       summary: Iniciar pago Webpay
       description: |
-        Crea la transacción para pagar `meses` meses de la suscripción del usuario de la sesión.
-        `returnUrl` debe ser de un origen permitido por CORS. Redirige al usuario a `url` con `token_ws`.
+        Crea la transacción para pagar `meses` cuotas de una suscripción del usuario de la sesión.
+        Con varias suscripciones, `suscripcion_id` indica cuál (debe ser del propio usuario); sin él
+        se usa la primera. `returnUrl` debe ser de un origen permitido por CORS. Redirige al usuario
+        a `url` con `token_ws`.
       requestBody:
         required: true
         content:
@@ -940,6 +999,7 @@ paths:
               properties:
                 returnUrl: { type: string, example: 'https://dev.sportspherecenter.com/pago/retorno' }
                 meses: { type: integer, example: 1 }
+                suscripcion_id: { type: integer, nullable: true, description: Suscripción a pagar. }
       responses:
         '200':
           description: Transacción creada.
@@ -953,12 +1013,12 @@ paths:
                   url: { type: string }
                   monto: { type: integer }
         '400':
-          description: URL de retorno no permitida o cantidad de meses inválida.
+          description: URL de retorno no permitida, `suscripcion_id` inválido, sin cuotas pendientes o cantidad de meses inválida.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Message' }
         '404':
-          description: El usuario no tiene suscripción.
+          description: El usuario no tiene suscripción (o no esa `suscripcion_id`).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Message' }
@@ -1022,7 +1082,7 @@ paths:
   /reportes/dashboard/:
     get:
       tags: [reportes]
-      summary: Totales del dashboard (staff)
+      summary: Totales del dashboard (lectura)
       responses:
         '200':
           description: Totales.
@@ -1048,6 +1108,7 @@ paths:
     get:
       tags: [avisos]
       summary: Listar avisos
+      description: Admin, entrenador y staff ven todos; el resto, solo los dirigidos a él.
       responses:
         '200':
           description: Avisos, del más reciente al más antiguo.
@@ -1062,13 +1123,17 @@ paths:
                       properties:
                         creado_por_nombre: { type: string, nullable: true }
                         creado_por_rol: { type: string, nullable: true }
+                        destinatarios: { type: integer, description: Cantidad de destinatarios. }
         '401': { $ref: '#/components/responses/NoAutenticado' }
 
   /avisos/add/:
     post:
       tags: [avisos]
       summary: Crear aviso y enviar push (admin)
-      description: Envía notificaciones push reales a los destinatarios que tengan suscripción.
+      description: |
+        Envía notificaciones push reales a los destinatarios que tengan suscripción. Indica al
+        menos uno de `target_all`, `team_ids` o `user_ids`; se suman sin repetir. Los destinatarios
+        se fijan al publicar. Si no queda ninguno, el aviso no se guarda.
       requestBody:
         required: true
         content:
@@ -1080,7 +1145,9 @@ paths:
                 titulo: { type: string, example: Cambio de horario }
                 contenido: { type: string, example: El entrenamiento del jueves pasa a las 19:00. }
                 target_all: { type: boolean, example: false, description: Enviar a todos los usuarios. }
-                user_ids: { type: array, items: { type: integer }, example: [2, 3] }
+                team_ids: { type: array, items: { type: integer }, example: [1], description: Todos los integrantes de esos equipos (deportistas, entrenadores y staff). }
+                user_ids: { type: array, items: { type: integer }, example: [2, 3], description: 'También se acepta `users_ids` (front antiguo).' }
+                audiencia: { type: string, maxLength: 200, example: 'Equipos: Senior Elite', description: 'Texto que se muestra en "Para: …". Con `target_all` y sin este campo queda "Todo el club".' }
       responses:
         '201':
           description: Aviso creado.
@@ -1104,7 +1171,7 @@ paths:
                       deleted: { type: integer }
                       failed: { type: integer }
         '400':
-          description: Faltan título, contenido o destinatarios.
+          description: Faltan título, contenido o destinatarios, `team_ids` no es una lista de números, o los equipos no tienen integrantes.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Message' }
@@ -1352,9 +1419,39 @@ paths:
   /apiMail/bienvenidaNew/:
     post:
       tags: [apiMail]
-      summary: Correo de bienvenida con plantilla propia (admin)
-      requestBody: { $ref: '#/components/requestBodies/Bienvenida' }
-      responses: *mailResponses
+      summary: Aviso de creación de usuario con plantilla Sphere (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, username]
+              properties:
+                email: { type: string }
+                name: { type: string }
+                username: { type: string }
+                password: { type: string, description: 'Opcional: si no viene no se muestra' }
+                rol: { type: string }
+                club: { type: string }
+                url: { type: string, description: 'Por defecto PORTAL_URL' }
+      responses: &contactoResponses
+        '200': { $ref: '#/components/responses/Mensaje' }
+        '400':
+          description: Faltan campos, el email no es válido o el mensaje es demasiado largo.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: Mailjet rechazó el envío.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: El envío de correos no está configurado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /apiMail/contacto/:
     post:
@@ -1375,23 +1472,7 @@ paths:
                 club: { type: string }
                 telefono: { type: string }
                 deportistas: { type: string }
-      responses: &contactoResponses
-        '200': { $ref: '#/components/responses/Mensaje' }
-        '400':
-          description: Faltan campos, el email no es válido o el mensaje es demasiado largo.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
-        '502':
-          description: Mailjet rechazó el envío.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
-        '503':
-          description: El envío de correos no está configurado.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+      responses: *contactoResponses
 
   /apiMail/contacto-upac/:
     post:
@@ -1413,6 +1494,101 @@ paths:
                 telefono: { type: string }
                 direccion: { type: string }
                 mensaje: { type: string }
+      responses: *contactoResponses
+
+  /apiMail/aviso/:
+    post:
+      tags: [apiMail]
+      summary: Aviso por correo (staff). Envía un correo por destinatario
+      description: Usa `destinatarios` o, para uno solo, `email` + `name`. Los lotes se envían de a 50.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [titulo, mensaje]
+              properties:
+                destinatarios: &destinatarios
+                  type: array
+                  items:
+                    type: object
+                    required: [email]
+                    properties:
+                      email: { type: string }
+                      name: { type: string }
+                email: { type: string }
+                name: { type: string }
+                titulo: { type: string }
+                mensaje: { type: string }
+                prioridad: { type: string, enum: [normal, importante, urgente], default: normal }
+                autor: { type: string }
+                equipo: { type: string }
+                url: { type: string, description: 'Si viene, muestra el botón "Ver aviso"' }
+            example:
+              destinatarios: [{ email: atleta@example.com, name: Sofía }]
+              titulo: Cambio de horario
+              mensaje: El entrenamiento del jueves pasa a las 19:00.
+              prioridad: importante
+              autor: Coach Camila
+              equipo: Galaxy
+      responses: *contactoResponses
+
+  /apiMail/evento/:
+    post:
+      tags: [apiMail]
+      summary: Aviso de calendario (entrenamiento, competencia, reunión...) (staff)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [titulo, fecha_inicio]
+              properties:
+                destinatarios: *destinatarios
+                email: { type: string }
+                name: { type: string }
+                titulo: { type: string }
+                tipo: { type: string, default: ENTRENAMIENTO }
+                estado: { type: string, enum: [nuevo, modificado, cancelado], default: nuevo }
+                fecha_inicio: { type: string, description: 'ISO 8601; con zona se muestra en hora de Chile' }
+                fecha_fin: { type: string }
+                ubicacion: { type: string }
+                equipo: { type: string }
+                descripcion: { type: string }
+                url: { type: string }
+            example:
+              destinatarios: [{ email: atleta@example.com, name: Sofía }]
+              titulo: Entrenamiento técnico
+              tipo: ENTRENAMIENTO
+              fecha_inicio: '2026-11-17T18:30:00'
+              fecha_fin: '2026-11-17T20:30:00'
+              ubicacion: Gimnasio UPAC
+              equipo: Galaxy
+      responses: *contactoResponses
+
+  /apiMail/asignacionEquipo/:
+    post:
+      tags: [apiMail]
+      summary: Aviso de asignación a un equipo (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [equipo]
+              properties:
+                destinatarios: *destinatarios
+                email: { type: string }
+                name: { type: string }
+                equipo: { type: string }
+                rol: { type: string }
+                entrenador: { type: string }
+                club: { type: string }
+                color: { type: string, description: 'Color hex del equipo, ej. #E91E63' }
+                url: { type: string }
       responses: *contactoResponses
 
 components:
@@ -1555,25 +1731,71 @@ components:
           properties:
             id: { type: integer }
         - $ref: '#/components/schemas/EquipoInput'
+    Perfiles:
+      type: array
+      items: { type: integer }
+      example: [3]
+      description: Perfiles adicionales del usuario (IDs de tipo de usuario). No dan permisos.
     TipoEvento:
       type: string
-      enum: [ENTRENAMIENTO, PARTIDO, REUNION, ACTIVIDAD, OTRO]
+      description: Texto libre. El front usa `Entrenamiento`, `Campamento` y `Campeonato`.
+      example: Entrenamiento
+    EventoInput:
+      type: object
+      properties:
+        equipo_id: { type: integer, example: 1 }
+        titulo: { type: string, maxLength: 200, example: Entrenamiento semanal }
+        descripcion: { type: string, example: '' }
+        tipo: { $ref: '#/components/schemas/TipoEvento' }
+        fecha_inicio: { type: string, format: date-time, example: '2026-11-01T18:00:00Z' }
+        fecha_fin: { type: string, format: date-time, example: '2026-11-01T20:00:00Z' }
+        ubicacion: { type: string, example: Gimnasio }
     PlanInput:
       type: object
       required: [name, description, price, interval, intervalCount]
       properties:
         name: { type: string, example: Mensual }
         description: { type: string, example: Plan mensual }
-        price: { type: integer, example: 25000 }
+        price: { type: integer, example: 25000, description: 'Precio mensual, del pack o de la clase, según `tipo`.' }
         interval: { type: string, example: month }
         intervalCount: { type: integer, example: 1 }
         active: { type: boolean, example: true }
+        tipo:
+          type: string
+          enum: [mensualidad, clase, pack]
+          default: mensualidad
+          description: '`mensualidad` se cobra mes a mes; `clase` y `pack` (clases privadas) en una sola cuota.'
+        disciplina: { type: string, nullable: true, maxLength: 50, example: Flyer, description: Obligatoria en `clase` y `pack`. }
+        cantidadClases: { type: integer, nullable: true, minimum: 2, maximum: 100, description: 'Solo en `pack` (obligatoria). En `clase` siempre es 1.' }
     Plan:
       allOf:
         - type: object
           properties:
             id: { type: integer }
+            suscripciones: { type: integer, description: 'Atletas distintos con el plan. Solo en `finanzas/listar/`.' }
         - $ref: '#/components/schemas/PlanInput'
+    Suscripcion:
+      type: object
+      properties:
+        id: { type: integer }
+        userId: { type: integer }
+        user: { type: object, properties: { id: { type: integer } } }
+        planId: { type: integer, nullable: true }
+        plan:
+          allOf:
+            - $ref: '#/components/schemas/Plan'
+            - type: object
+              properties:
+                createdAt: { type: string, format: date-time, nullable: true }
+        status: { type: string }
+        startDate: { type: string, format: date-time }
+        endDate: { type: string, format: date-time }
+        nextBillingDate: { type: string, format: date-time, nullable: true }
+        canceledAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time, nullable: true }
+        totalMeses: { type: integer, nullable: true, description: Cuotas totales (1 en clases y packs). }
+        mesesPagados: { type: integer, nullable: true }
+        mesesPendientes: { type: integer }
     SuscripcionInput:
       type: object
       properties:
@@ -1602,3 +1824,4 @@ components:
         contenido: { type: string }
         creado_por: { type: integer, nullable: true }
         fecha_creacion: { type: string, format: date-time }
+        audiencia: { type: string, nullable: true, example: 'Equipos: Senior Elite', description: A quién se dirigió. Null en avisos anteriores a este campo. }
