@@ -216,7 +216,8 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 
 	// DRF autentica antes de evaluar permisos y método
 	user, fail := a.authenticate(r)
-	if fail != nil {
+	// En rutas públicas (login, refresh, logout...) un access token vencido no bloquea: se sigue como anónimo
+	if fail != nil && rt.perm != AllowAny {
 		c.unauthorized(fail)
 		return
 	}

@@ -173,11 +173,10 @@ type refreshToken struct {
 
 // newRefreshToken replica RefreshToken.for_user(user) y lo registra en
 // token_blacklist_outstandingtoken como hace la app token_blacklist.
-// Siempre dura REFRESH_TOKEN_LIFETIME: en Django el string del token se generaba
-// antes del set_exp de "recuérdame", así que esa duración nunca llegaba a la cookie.
-func (a *App) newRefreshToken(ctx context.Context, userID int64) (*refreshToken, error) {
+// Dura lo mismo que su cookie (24 h, o 5 días con "recuérdame").
+func (a *App) newRefreshToken(ctx context.Context, userID int64, lifetime time.Duration) (*refreshToken, error) {
 	now := time.Now().UTC()
-	t := &refreshToken{jti: newJTI(), userID: userID, iat: now.Unix(), created: now, expires: now.Add(refreshTokenLifetime)}
+	t := &refreshToken{jti: newJTI(), userID: userID, iat: now.Unix(), created: now, expires: now.Add(lifetime)}
 	t.raw = a.sign(jwt.MapClaims{
 		"token_type": "refresh",
 		"exp":        t.expires.Unix(),
@@ -191,11 +190,12 @@ func (a *App) newRefreshToken(ctx context.Context, userID int64) (*refreshToken,
 }
 
 // accessFrom replica refresh.access_token: copia los claims del refresh (salvo
-// token_type, exp y jti) y vence ACCESS_TOKEN_LIFETIME después.
-func (a *App) accessFrom(userID, iat any, from time.Time) string {
+// token_type, exp y jti). Vence junto con su cookie: una cookie viva con el token vencido
+// hacía responder 401 a todas las rutas, incluidas login y refresh.
+func (a *App) accessFrom(userID, iat any, from time.Time, lifetime time.Duration) string {
 	return a.sign(jwt.MapClaims{
 		"token_type": "access",
-		"exp":        from.Add(accessTokenLifetime).Unix(),
+		"exp":        from.Add(lifetime).Unix(),
 		"iat":        iat,
 		"jti":        newJTI(),
 		"user_id":    userID,

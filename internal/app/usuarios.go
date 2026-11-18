@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"net"
 	"net/http"
 	"slices"
@@ -548,21 +547,19 @@ func (a *App) login(c *Ctx) {
 	}
 
 	remember := truthy(rememberMe)
-	accessLifetime, refreshLifetime := 15*time.Minute, 24*time.Hour
-	maxAgeAccess, maxAgeRefresh := 900, 86400
+	accessLifetime, refreshLifetime := accessTokenLifetime, refreshTokenLifetime
 	if remember {
-		accessLifetime, refreshLifetime = 24*time.Hour, 30*24*time.Hour
-		maxAgeAccess, maxAgeRefresh = 86400, 432000
+		accessLifetime, refreshLifetime = 24*time.Hour, 5*24*time.Hour
 	}
+	// Cookies y tokens vencen a la vez
+	maxAgeAccess, maxAgeRefresh := int(accessLifetime.Seconds()), int(refreshLifetime.Seconds())
 
-	refresh, err := a.newRefreshToken(c.ctx(), u.ID)
+	refresh, err := a.newRefreshToken(c.ctx(), u.ID, refreshLifetime)
 	if err != nil {
 		c.serverError(err)
 		return
 	}
-	// Como en Django, el access token siempre usa ACCESS_TOKEN_LIFETIME (15 min):
-	// el set_exp sobre refresh.access_token no afectaba al token que se devolvía.
-	access := a.accessFrom(refresh.userID, refresh.iat, refresh.created)
+	access := a.accessFrom(refresh.userID, refresh.iat, refresh.created, accessLifetime)
 
 	now := time.Now()
 	var tipo, tipoID any
@@ -622,18 +619,17 @@ func (a *App) refreshTokenView(c *Ctx) {
 		return
 	}
 	now := time.Now()
-	access := a.accessFrom(jsonInt64(claims["user_id"]), jsonInt64(claims["iat"]), now)
-
 	exp, _ := pyInt(claims["exp"])
-	daysRemaining := math.Floor((float64(exp) - float64(now.UnixMicro())/1e6) / 86400)
-	remember := daysRemaining > 7
+	iat, _ := pyInt(claims["iat"])
+	// Un refresh de "recuérdame" dura más que el normal
+	remember := time.Duration(exp-iat)*time.Second > refreshTokenLifetime
 
-	maxAgeAccess, maxAgeRefresh := 900, 86400
-	accessLifetime, refreshLifetime := 15*time.Minute, 24*time.Hour
+	accessLifetime, refreshLifetime := accessTokenLifetime, refreshTokenLifetime
 	if remember {
-		maxAgeAccess, maxAgeRefresh = 86400, 432000
 		accessLifetime, refreshLifetime = 24*time.Hour, 5*24*time.Hour
 	}
+	maxAgeAccess, maxAgeRefresh := int(accessLifetime.Seconds()), int(refreshLifetime.Seconds())
+	access := a.accessFrom(jsonInt64(claims["user_id"]), jsonInt64(claims["iat"]), now, accessLifetime)
 	c.setCookie(cookieAccessName, access, maxAgeAccess)
 	c.JSON(200, obj(
 		"message", "Token refrescado",
